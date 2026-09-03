@@ -1,48 +1,51 @@
 # harness-kit — Architecture
 
-One authored kit, four coding-agent harnesses, distributed over npm.
+One authored kit, four coding-agent harnesses.
 
-**Status:** design. No code yet.
-**Last verified:** 2026-09-02 against locally installed CLIs.
+**Status:** Phase 0 implemented and wired locally. Not published.
+**Last verified:** 2026-09-03, against the installed CLIs and by running real agents.
+
+Companion documents: [SCOPE.md](./SCOPE.md) for phasing, [AGENTS.md](./AGENTS.md)
+for orientation if you are picking this up cold.
 
 ---
 
 ## 1. Purpose
 
 Package our guardrails, context injection, skills, and MCP wiring **once**, and run
-them unmodified on Claude Code, Codex, Pi, and Oh-My-Pi (omp) — with a single
-`npm update` propagating logic changes to every harness.
+them unmodified on Claude Code, Codex, Pi, and Oh-My-Pi (omp).
 
 Non-goal: a lowest-common-denominator kit. Where a harness is more capable, the
 adapter uses that capability; where it is less capable, it degrades explicitly and
 visibly (`doctor` reports it), never silently.
 
+That last word carries most of the weight. Every serious defect found so far has
+been a silent one — a guardrail reporting itself active while absent. See §11.
+
 ---
 
 ## 2. Verified harness capabilities
 
-All rows below were verified by inspecting the installed CLIs on 2026-09-02, not
-inferred from documentation.
+Verified against installed CLIs, and — where marked — by running the agent and
+observing what it actually does.
 
-| | **Claude Code** | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.2` |
+| | **Claude Code** `2.1.259` | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.6` |
 |---|---|---|---|---|
-| Interception model | process hook | **process hook** | in-process TS | in-process TS |
-| Hook config | `.claude/settings.json` → `hooks` | `~/.codex/hooks.json` | — (extensions) | — (extensions) |
-| Can block a tool call | ✅ | ✅ | ✅ | ✅ |
-| Extension/plugin runtime | plugin dirs | plugin dirs | TS via jiti | TS via jiti |
-| Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | `package.json` `pi` key | `package.json` `omp`/`pi` key |
+| Interception model | process hook | process hook | in-process ESM | in-process ESM |
+| Hook config | `~/.claude/settings.json` → `hooks` | `~/.codex/hooks.json` | — (extensions) | — (extensions) |
+| Can block a tool call | ✅ verified | ✅ | ✅ verified | ✅ verified |
+| Extension registration | — | — | `pi install <path>` | `omp install <path>` |
+| Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | `package.json` `pi` key | `package.json` `omp` key |
 | Marketplace manifest | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` | — (npm/git direct) | — (npm/git direct) |
-| Marketplace CLI | `claude plugin marketplace add` | `codex plugin marketplace add` | `pi install npm:…` | `omp plugin install` |
 | npm as a source | via git/marketplace | ✅ native `npm:` source | ✅ | ✅ |
 | Skills | ✅ native | ✅ (`"skills": "./skills/"`) | ✅ Agent Skills std. | ✅ |
 | MCP | ✅ `.mcp.json` | ✅ `.mcp.json` / `mcpServers` | ✅ settings | ✅ `mcp.json` |
-| Subagents | ✅ | ✅ (`SubagentStart/Stop`) | ❌ | ✅ |
+| Subagents | ✅ | ✅ | ❌ | ✅ |
 | Rules file | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `RULES.md` + `rules/*.mdc` |
 
 ### 2.1 Hook events
 
-Claude Code and Codex expose a near-identical event set. Codex event names were
-read from the `codex` binary (v0.146.0); some are not yet in public docs.
+Claude Code and Codex expose a near-identical event set.
 
 | Event | Claude Code | Codex |
 |---|---|---|
@@ -57,28 +60,19 @@ read from the `codex` binary (v0.146.0); some are not yet in public docs.
 | `PermissionRequest` | — | ✅ |
 
 Pi/omp equivalents (event-bus names): `tool_call` (≈ PreToolUse, can block),
-`tool_result` (≈ PostToolUse), `input` + `before_agent_start` (≈ UserPromptSubmit),
-`session_start` / `session_shutdown`, `session_before_compact` / `session_compact`,
-`context` (no Claude/Codex analogue — mutate the message list before every LLM call).
+`tool_result` (≈ PostToolUse), `before_agent_start` (≈ UserPromptSubmit),
+`session_start` / `session_shutdown`, `context` (no Claude/Codex analogue).
+
+The kit uses exactly two: **`PreToolUse` / `tool_call`** and
+**`UserPromptSubmit` / `before_agent_start`**.
 
 ### 2.2 Hook wire format
 
-Both process-tier harnesses read a JSON payload on stdin and accept a JSON
-response on stdout under `hookSpecificOutput`:
-
-```jsonc
-// PreToolUse response
-{ "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "allow" | "deny" | "ask",
-    "permissionDecisionReason": "…",
-    "additionalContext": "…"
-} }
-```
+Both process-tier harnesses read JSON on stdin and accept a JSON response on
+stdout under `hookSpecificOutput`.
 
 **Divergence:** Codex reserves `permissionDecision: "allow"` for responses that
-also supply `updatedInput` (a rewritten tool call). Returning bare `"allow"` can
-trip Codex hook validation.
+also supply `updatedInput`. A bare `"allow"` can trip its hook validation.
 
 **Therefore the universal contract is the exit code, not the JSON:**
 
@@ -88,27 +82,23 @@ trip Codex hook validation.
 | **Block** | **`exit 2`, reason on stderr** | **Claude Code, Codex** |
 | Inject context | `hookSpecificOutput.additionalContext` | Claude Code, Codex |
 
-Phase 1 uses **exit 2 + stderr exclusively** for blocking. One shim binary, byte
-identical, works on both harnesses. JSON responses are used only for context
-injection, where the shapes agree.
+One shim, byte-identical, no per-harness branching in the blocking path.
 
 ---
 
 ## 3. The core insight: two tiers, not four adapters
 
-The four harnesses collapse into **two integration tiers**:
-
 ```
                     ┌─────────────────────────────┐
                     │      core/  (pure ESM)      │
                     │  no harness imports at all  │
-                    │  checkTool() · buildCtx()   │
+                    │  checkTool() · buildContext │
                     └──────────┬──────────────────┘
                                │
              ┌─────────────────┴──────────────────┐
              ▼                                    ▼
    ┌───────────────────────┐         ┌────────────────────────┐
-   │ Tier A — process hook │         │ Tier B — TS extension  │
+   │ Tier A — process hook │         │ Tier B — extension     │
    │ stdin JSON → exit 0|2 │         │ pi.on("tool_call", …)  │
    ├───────────────────────┤         ├────────────────────────┤
    │ Claude Code           │         │ Pi                     │
@@ -116,254 +106,285 @@ The four harnesses collapse into **two integration tiers**:
    └───────────────────────┘         └────────────────────────┘
 ```
 
-Two adapters, ~60 lines each. Everything else is shared.
+Tier A is 69 lines; Tier B is 48, plus two entry points of a dozen lines each.
+Everything else is shared.
+
+**Answered:** one Tier B implementation serves both Pi and omp (`shared.mjs`);
+`pi.mjs` and `omp.mjs` are thin re-exports differing only in a crash-log label.
+They are kept separate so future divergence has a home.
 
 ---
 
 ## 4. Package layout
 
+Actual, as built.
+
 ```
-harness-kit/                          # published as @<org>/harness-kit
-├── package.json                      # bin + exports + "pi" key + "omp" key
-├── src/
-│   ├── core/                         # ← the only place logic lives
-│   │   ├── index.mjs                 # public: checkTool, buildContext, loadConfig
-│   │   ├── config.mjs                # global → project → local merge
-│   │   └── guardrails/
-│   │       ├── secret.mjs            # .env, *.pem, id_rsa, credentials…
-│   │       ├── heavy-path.mjs        # node_modules, dist, .git… (gitignore syntax)
-│   │       └── broad-glob.mjs        # **/*.ts at repo root, etc.
-│   ├── tier-a/                       # process hooks
-│   │   └── guard.cjs                 # stdin JSON → core → exit 0|2
-│   ├── tier-b/                       # in-process extensions
-│   │   ├── shared.ts                 # the real body, harness-parameterised
-│   │   ├── pi.ts                     # 8-line re-export
-│   │   └── omp.ts                    # 8-line re-export
-│   └── cli/                          # ── Phase 1 ──
-│       ├── kit.mjs                   # init · update · doctor
-│       └── guard.mjs                 # `hk-guard` — core behind a CLI (CI, git hooks)
-├── scripts/                          # ── Phase 0 ──
-│   ├── dev-link.sh                   # wire all four harnesses to this checkout
-│   ├── dev-unlink.sh                 # back it all out
-│   └── doctor.mjs                    # promoted to `hk doctor` in Phase 1
-├── plugins/                          # ── Phase 1 ── generated, committed, published
-│   ├── claude/.claude-plugin/plugin.json + hooks/hooks.json
-│   └── codex/.codex-plugin/plugin.json + hooks.json
-├── content/                          # ── Phase 2+ ── authored once, neutral
-│   ├── skills/*/SKILL.md
-│   └── rules/*.md
-├── ARCHITECTURE.md
-└── SCOPE.md
+harness-kit/
+├── package.json              exports + "pi" key + "omp" key; zero dependencies
+├── AGENTS.md                 read this first if you are new here
+├── src/core/                 ← all logic; no harness imports anywhere
+│   ├── index.mjs             checkTool() — the single entry point
+│   ├── normalize.mjs         four payload dialects → one canonical shape
+│   ├── bash.mjs              shell analysis; the hardest file in the repo
+│   ├── config.mjs            defaults ← global ← project ← local
+│   ├── context.mjs           the non-blocking half of hooks
+│   ├── log.mjs               fail-open crash breadcrumbs
+│   └── guardrails/           secret · heavy-path · broad-glob
+├── src/tier-a/guard.mjs      Claude Code + Codex
+├── src/tier-b/               shared.mjs + pi.mjs + omp.mjs
+├── test/                     203 tests, node --test, no framework
+└── scripts/                  doctor · replay · dev-link · dev-unlink
 ```
 
-### package.json
+**`.mjs` throughout, not `.cjs` + `.ts`.** Both process harnesses run
+`node <file>`, so CJS buys nothing; Pi and omp load `.ts/.js/.mjs/.cjs`, so plain
+ESM means no build step and no type packages in Phase 0.
 
-Phase 0 needs only `exports` (so the adapters can `import` the core by path).
-`bin`, the `pi`/`omp` keys, and publishing metadata arrive in Phase 1.
+### package.json keys that matter
 
 ```jsonc
 {
-  "name": "@<org>/harness-kit",
-  "bin": { "hk": "./src/cli/kit.mjs", "hk-guard": "./src/cli/guard.mjs" },
   "exports": {
-    "./core":   "./src/core/index.mjs",
-    "./guard":  "./src/tier-a/guard.cjs",
-    "./pi":     "./src/tier-b/pi.ts",
-    "./omp":    "./src/tier-b/omp.ts"
+    "./core":  "./src/core/index.mjs",
+    "./guard": "./src/tier-a/guard.mjs",
+    "./pi":    "./src/tier-b/pi.mjs",
+    "./omp":   "./src/tier-b/omp.mjs"
   },
-  "pi":  { "extensions": ["./src/tier-b/pi.ts"] },
-  "omp": { "extensions": ["./src/tier-b/omp.ts"] }
+  "pi":  { "extensions": ["./src/tier-b/pi.mjs"] },
+  "omp": { "extensions": ["./src/tier-b/omp.mjs"] }
 }
 ```
+
+The `pi` and `omp` keys are **load-bearing in Phase 0**, not Phase 1 packaging
+metadata — see §8.0.
 
 ---
 
 ## 5. The core contract
 
-Everything narrows to one pure function. No I/O, no process exit, no harness types.
-
 ```js
-// src/core/index.mjs
 /**
- * @param {{ tool: string, input: object, cwd: string }} call
- * @returns {{ blocked: boolean, reason?: string, rule?: string }}
+ * @param {object} payload  Raw hook/event payload from ANY harness, unmodified.
+ * @param {object} [opts]   { cwd, config, overrides }
+ * @returns {{ blocked: boolean, guardrail?, rule?, target?, reason? }}
  */
-export function checkTool(call) { … }
+export function checkTool(payload, opts = {})
 ```
 
-Adapters are responsible only for **normalising the call** into that shape and
-**translating the verdict** into their harness's dialect. All four harnesses name
-their tools differently; normalisation is a lookup table in each adapter:
+Adapters do not normalise. They hand the raw payload straight through, and
+`normalize.mjs` owns every dialect. This is deliberate: normalisation logic in
+two adapters drifts, and the drift is silent.
 
-| Concept | Claude Code | Codex | Pi / omp |
-|---|---|---|---|
-| shell | `Bash` | `Bash` (incl. `exec_command`) | `bash` |
-| read | `Read` | `read` | `read` |
-| write | `Write` | `apply_patch` | `write` |
-| edit | `Edit` | `apply_patch` | `edit` |
-| glob | `Glob` | — | `glob` |
+Guardrails are pure `check(call, config) → null | verdict`. No harness imports,
+no `process.exit`, no stdout.
 
 ---
 
-## 6. Adapter implementations
+## 6. Payload normalisation — where the bodies are buried
 
-### Tier A — `src/tier-a/guard.cjs`
+This section exists because **four of the six defects found so far were the same
+mistake**: assuming a payload shape instead of capturing it.
+
+A tool whose shape the normaliser does not recognise is **not a safe default**.
+It becomes `KIND.OTHER` with no paths, every guardrail sees nothing, the call
+passes, and `doctor` still reports "wired".
+
+### Shapes actually observed
+
+| Concept | Claude Code | Codex | Pi | omp |
+|---|---|---|---|---|
+| shell | `Bash` `{command}` | `shell` `{command}` | `bash` `{command}` | `bash` `{command}` |
+| read | `Read` `{file_path}` | `read` `{path}` | `read` `{path}` | `read` `{path}` |
+| edit | `Edit` `{file_path}` | `apply_patch` `{input}` | `edit` `{path,…}` | `edit` `{input}` **hashline** |
+| glob | `Glob` `{pattern,path}` | — | `glob` `{pattern}` | `glob` `{path}` ← pattern in `path` |
+| grep | `Grep` `{pattern,path}` | — | `grep` `{pattern,path}` | `grep` `{pattern,path,case,gitignore}` |
+
+Two of those cost real bugs:
+
+**omp's hashline editor** sends the whole patch as one `input` string with the
+target named inside it and no path field at all:
+
+```
+*** Begin Patch
+[README.md#F613]
+PUT 3.=3:
++some text now
+*** End Patch
+```
+
+`normalize()` returned `paths: []` for every omp edit. Editing `.env` was
+invisible. Patch bodies are now parsed for targets in three formats: hashline
+`[path#F123]`, apply_patch `*** Update File:`, unified diff `+++ b/path`. Only
+`input`/`patch`/`diff`/`edits` are scanned — `content` and `text` hold whole
+files on a Write, and a document quoting a diff would name paths nobody touches.
+
+**omp's glob** carries the pattern in `path` with no `pattern` field, so
+`broadGlob` never fired on omp while working everywhere else. The path is split
+at its first wildcard segment so `src/**/*.ts` reaches the guardrail as pattern
+`**/*.ts` under searchPath `src` — the pair every other harness sends.
+
+### Capture, do not guess
+
+Before trusting any harness, capture its tools:
 
 ```js
-#!/usr/bin/env node
-const { checkTool } = require('@<org>/harness-kit/core');
-try {
-  const p = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-  const v = checkTool({
-    tool:  p.tool_name ?? p.toolName,
-    input: p.tool_input ?? p.input ?? {},
-    cwd:   p.cwd ?? process.cwd(),
-  });
-  if (v.blocked) { console.error(v.reason); process.exit(2); }   // universal block
-} catch (e) { /* fail-open */ }
-process.exit(0);
-```
-
-Wired identically on both harnesses:
-
-```jsonc
-// .claude/settings.json
-{ "hooks": { "PreToolUse": [{ "matcher": "Bash|Read|Write|Edit|Glob",
-  "hooks": [{ "type": "command", "command": "npx -y hk-guard" }] }] } }
-
-// ~/.codex/hooks.json
-{ "hooks": { "PreToolUse": [{ "command": "npx -y hk-guard" }] } }
-```
-
-### Tier B — `src/tier-b/shared.ts`
-
-```ts
-import { checkTool } from '@<org>/harness-kit/core';
-
-export function install(pi: any) {
-  pi.on('tool_call', (event: any, ctx: any) => {
-    const v = checkTool({ tool: event.toolName, input: event.input, cwd: ctx.cwd });
-    if (v.blocked) return { block: true, reason: v.reason };
-  });
+// load with `omp -e spy.mjs` / `pi -e spy.mjs`
+export default function (pi) {
+  pi.on('tool_call', (e) => console.error(e.toolName, Object.keys(e.input ?? {})));
 }
 ```
 
-`pi.ts` and `omp.ts` are `export default (pi) => install(pi)`. They differ only in
-which type package they import — and omp runs Pi-authored extensions through a
-compatibility shim regardless, so a single file may well serve both. **Verify
-during Milestone 1 whether we need two files or one.**
+**Codex is the remaining unverified surface.** Its Tier A payloads have only
+ever been synthetic here. Spy on a real Codex session before treating the
+dogfood as covering all four.
 
 ---
 
-## 7. Fail-open, always
+## 7. What the guardrails actually enforce
 
-Every adapter wraps its entire body in try/catch and exits 0 / returns undefined
-on any error. A crashed guardrail must never brick a session. Crashes append one
-JSON line to `~/.harness-kit/crash.jsonl`; `hk doctor` surfaces them.
+| Guardrail | Concern | Fires on |
+|---|---|---|
+| `secret` | credentials entering model context | any access — reading, copying, editing |
+| `heavyPath` | context economy | **unbounded** reads only |
+| `broadGlob` | context economy | broad pattern **and** root-ish search path |
 
-Rationale: a guardrail that hard-fails is worse than one that is briefly absent —
-users disable the whole kit after one bad day.
+The distinction between the first two is load-bearing and easy to erase by
+accident:
+
+- `secret` uses **permissive** path extraction and no bounded-read filter.
+  Copying a `.env` is an exfiltration risk even though it prints nothing, and
+  `find . -name .env -exec cat` reaches it through a second command.
+- `heavyPath` uses **role-aware** extraction and only fires on unbounded reads.
+  `rm -rf dist` costs no context. `ls node_modules/ws/package.json` prints one
+  line. `sed -n '30,60p'` prints thirty. Blocking those is noise; blocking
+  `ls node_modules` and `cat dist/bundle.js` is the job.
+
+### A word's role, not its spelling
+
+`bash.mjs` is the largest file in `core/` because deciding *which strings in a
+command are paths* is the whole problem. Every heavy-path blocklist entry —
+`build`, `dist`, `out`, `target`, `coverage` — is also an ordinary English word
+and a common search term.
+
+```
+grep -rn "build" src            "build" is the search term, not a directory
+grep -vE "node_modules|dist/"   an exclusion; blocked for naming what it excludes
+find . -name .git -type d       a predicate value, not a path
+echo "checking build output"    prose
+```
+
+Treating every operand as a path blocked **1 in 25** real calls. Extraction is
+now command-aware: quote-respecting tokenizer, heredoc bodies dropped,
+per-family flag sets (`-c` is *count* to grep and *comment* to git), and the
+pattern operand of `grep`/`sed`/`awk` skipped.
+
+The same mistake survived separately in the structured-tool path: both
+guardrails read a Grep tool's `pattern` field as a path, so searching *for* the
+word `build` was blocked as reading a `build` directory. `pattern` is now
+consulted only for non-GREP kinds — a glob names files, a grep pattern does not.
 
 ---
 
 ## 8. Distribution
 
-The kit is wired the same way at every maturity level; only the **source** of the
-code changes. Phase 0 points the wiring at a local checkout, Phase 1 points it at
-published artifacts. Nothing built in Phase 0 is discarded.
+The kit is wired the same way at every maturity level; only the **source** of
+the code changes. Nothing built in Phase 0 is discarded.
 
 ### 8.0 Phase 0 — local (us only)
 
-No npm publish, no marketplace, no `npm link`. Symlinks and absolute paths only —
-they avoid npm's global state and are trivially reversible.
-
 | Harness | Wiring | Reload |
 |---|---|---|
-| Pi | symlink `~/.pi/agent/extensions/harness-kit.ts` → `<repo>/src/tier-b/pi.ts` | `/reload` |
-| omp | symlink `~/.omp/agent/extensions/harness-kit.ts` → `<repo>/src/tier-b/omp.ts` | `/reload` |
-| Claude Code | `~/.claude/settings.json` → `node <repo>/src/tier-a/guard.cjs` | next tool call |
-| Codex | `~/.codex/hooks.json` → `node <repo>/src/tier-a/guard.cjs` | next tool call |
+| Claude Code | `~/.claude/settings.json` → append to `hooks.PreToolUse` | restart |
+| Codex | `~/.codex/hooks.json` → append to `hooks.PreToolUse` | restart |
+| Pi | `pi install <repo>` — registers in settings, links the checkout | `/reload` |
+| omp | `omp install <repo>` — same | `/reload` |
 
-Applied by `scripts/dev-link.sh`, reversed by `scripts/dev-unlink.sh`.
+Applied by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
+Both are dry-run by default and idempotent.
 
-Pi and omp auto-discover extensions in those directories, so the symlink is the
-whole integration. Both process-tier harnesses re-exec the shim per tool call, so
-an edit is live immediately.
+> **Do not drop a symlink into `~/.pi/agent/extensions/` or
+> `~/.omp/agent/extensions/`.** Neither agent scans those paths. An earlier
+> version of `dev-link.sh` did exactly that; the directory existed only because
+> the script created it, `pi list` reported "No packages installed", omp read a
+> `.env` unimpeded — and `doctor` reported "wired", because it was looking for
+> the symlink it had just made. Registration goes through each agent's own
+> package manager, and `doctor` now asks `pi list` / `omp plugin list` rather
+> than inspecting the filesystem.
 
-**This loop is faster than the published one** — edit, reload, done; no publish, no
-version bump, no cache invalidation. It stays the permanent dev environment even
-after Phase 1 ships.
+Tier A entries are **appended** with `jq`, never assigned. Both files carry other
+hooks in practice; clobbering them is the one unrecoverable installer mistake.
+Uninstall filters the array by command path so hooks added later survive.
+
+Because Tier B registration links the checkout rather than copying it, and Tier A
+re-execs the shim per tool call, an edit to `core/` is live everywhere with no
+re-link — at most a `/reload`.
 
 ### 8.1 Phase 1 — published (other people)
 
-**One npm package, four install paths.** The logic is never copied into a project;
-only wiring is generated, and the wiring points into `node_modules`.
+**One npm package, four install paths.** Logic is never copied into a project;
+only wiring is generated, pointing into `node_modules`.
 
 | Harness | Command | Files written into the project |
 |---|---|---|
 | Pi | `pi install npm:@<org>/harness-kit` | none — reads the `pi` key |
 | omp | `omp plugin install @<org>/harness-kit` | none — reads the `omp` key |
-| Claude Code | `hk init --harness claude` | `.claude/settings.json` (merged) |
+| Claude Code | `hk init --harness claude` | `~/.claude/settings.json` (merged) |
 | Codex | `hk init --harness codex` | `~/.codex/hooks.json` (merged) |
 
-Consequence: `npm update @<org>/harness-kit` upgrades the guardrails **on all four
-harnesses at once**, with no reinstall.
-
-The only structural difference from Phase 0 is the path in the wiring —
-`<repo>/src/...` becomes `npx -y hk-guard` / a `node_modules` resolution. The
-adapters, the core, and the hook payloads are byte-identical.
+The only structural change from Phase 0 is the path in the wiring. Adapters,
+core, and payload handling are byte-identical.
 
 ### Optional: native plugin distribution (evaluate in Phase 2)
 
-Claude Code and Codex both have marketplace systems whose plugin formats are
-near-mirrors. Publishing a marketplace repo would drop Claude Code and Codex to
-**zero generated files** too, at the cost of maintaining two manifests:
-
-| | Claude Code | Codex |
-|---|---|---|
-| Manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` |
-| Hooks | `hooks/hooks.json` | `hooks.json` (`"hooks": "./hooks.json"`) |
-| Skills | `skills/` | `"skills": "./skills/"` |
-| MCP | `.mcp.json` | `.mcp.json` / `mcpServers` |
-| Path variable | `${CLAUDE_PLUGIN_ROOT}` | plugin-relative |
-| Marketplace | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` |
-| Sources | git-subdir | local, git-subdir, **npm**, url |
-
-Deferred: it is additive, and Phase 1 must not block on it.
+Claude Code and Codex marketplace formats are near-mirrors. Publishing a
+marketplace repo would drop both to zero generated files, at the cost of two
+manifests. Additive; Phase 1 must not block on it.
 
 ---
 
 ## 9. Configuration
 
-Single file, layered, JSON-schema validated. `~/.harness-kit.json` → project
-`.harness-kit.json` → `.harness-kit.local.json`.
+Single file, layered: `~/.harness-kit.json` → project `.harness-kit.json` →
+`.harness-kit.local.json`. Read by `core/config.mjs`, identical on every
+harness. **No per-harness configuration exists anywhere in the kit.**
 
 ```jsonc
 {
   "guardrails": {
-    "secret":     { "enabled": true, "allow": ["*.example", "*.sample"] },
-    "heavyPath":  { "enabled": true, "patterns": ["node_modules", "dist", ".git"] },
-    "broadGlob":  { "enabled": true }
-  },
-  "harnesses": { "claude": true, "codex": true, "pi": true, "omp": true }
+    "secret":    { "enabled": true, "allow": ["fixtures/*"] },
+    "heavyPath": { "enabled": true, "patterns": ["node_modules", "dist"], "allow": [] },
+    "broadGlob": { "enabled": true }
+  }
 }
 ```
 
-Read by `core/config.mjs` — identical on every harness. No per-harness config.
+Config is read per call, so a change takes effect on the next tool call with no
+restart. That makes it the emergency off-switch:
+
+```bash
+echo '{"guardrails":{"heavyPath":{"enabled":false}}}' > ~/.harness-kit.json
+```
+
+`HK_NO_GLOBAL_CONFIG=1` stops the loader reading `~`; the test suite sets it so
+runs are hermetic.
 
 ---
 
-## 10. Update & ownership (Phase 1)
+## 10. Fail-open, always
 
-Generated wiring files are tracked in `~/.harness-kit/manifest.json` with a
-checksum and an `ownership: kit | user` flag. `hk update` rewrites kit-owned files
-whose checksum is unchanged, leaves user-modified files alone, and reports drift.
+Three independent layers catch errors and allow: `index.mjs`, `guard.mjs`,
+`shared.mjs`. A crash appends one JSON line to `<kit>/.local/crash.jsonl`
+(`HK_LOG_DIR` overrides; Phase 1 moves it to `~/.harness-kit/`) and the call
+proceeds. `doctor` replays the log.
 
-This matters far less than in a copy-based kit, because Phase 1 generates only two
-small wiring files — everything substantive lives in `node_modules`.
+Rationale, and it is a product decision rather than a coding habit: a guardrail
+that hard-fails is worse than one briefly absent, because users disable the
+whole kit after one bad day. Failing open is worth more than the calls it lets
+through.
 
-Not needed in Phase 0: `dev-link.sh` owns the wiring outright and `dev-unlink.sh`
-reverses it, so there is no drift to reconcile.
+Note the limit — fail-open covers *crashes*, not *correct-but-wrong blocks*. For
+those the config kill switch is the escape hatch.
 
 ---
 
@@ -371,32 +392,46 @@ reverses it, so there is no drift to reconcile.
 
 | Risk | Mitigation |
 |---|---|
-| **omp release velocity** (v18, compiled binary, frequent releases) | Target only the documented extension event API; pin nothing internal; `hk doctor` version-checks |
-| **Codex `permissionDecision: "allow"` validation** | Use exit-2 blocking exclusively in Phase 1 |
-| **Codex hook events read from binary strings**, not public docs | Treat anything past `PreToolUse`/`PostToolUse`/`SessionEnd` as unverified until exercised |
-| Tool-name drift across harnesses | Normalisation table in each adapter, covered by fixtures |
-| Pi has no subagents | Scope agent content with `harnesses:` frontmatter (Phase 4+) |
-| Guardrail bug blocks legitimate work | Fail-open + per-guardrail config kill switch + `hk doctor` |
+| **Silent absence** — a guardrail reporting active while never loading | `doctor` asks each agent's package manager, never the filesystem; live block test per harness before trusting a wiring change |
+| **Unrecognised tool shape** — new tool ⇒ `KIND.OTHER` ⇒ no guardrail | Capture payloads with the spy extension (§6) before trusting; `test/tool-shapes.test.mjs` pins real captures |
+| **Replay blind spots** — a clean rate on paths a corpus never exercised | `replay.mjs` lists in-scope tools the corpus never hit and says the rate is silent about them |
+| **False positives** | Role-aware extraction; bounded-read rule; replay against real history after every guardrail change |
+| **Context injection causing pre-emptive refusal** | The injected text must not name the guardrails — see below |
+| **omp release velocity** (compiled binary, frequent releases) | Target only the documented extension event API; `doctor` version-checks |
+| **Codex payloads never captured live** | Spy on a real Codex session before Phase 1 |
+| **Codex `permissionDecision: "allow"` validation** | Exit-2 blocking exclusively |
+
+### The injected-context trap
+
+An earlier `context.mjs` listed the active guardrails
+(`"Guardrails active: secret, heavyPath, broadGlob"`). Agents then **simulated**
+the rules instead of relying on them: asked to run `grep -rn "build" src`, omp
+saw the word `build`, concluded heavy-path would object, and refused. Its own
+thought line read *"Reporting blocked command due to build path"*. Nothing had
+blocked it.
+
+That failure is worse than a false block: no hook fires, nothing is logged, no
+reason is shown, and the work silently does not happen. The injected text now
+says a hook exists, says what a block looks like, and tells the agent **not to
+anticipate one**. Do not reintroduce guardrail names there.
 
 ---
 
 ## 12. Open questions
 
-**Blocking Phase 0**
+**Resolved during Phase 0**
 
-1. Does one `tier-b` file serve both Pi and omp, or are two needed? omp runs
-   Pi-authored extensions through a compatibility shim, so one file may suffice.
-   Step 3 of the Phase 0 sequence answers this.
-2. Claude Code wiring at project (`.claude/settings.json`) or user
-   (`~/.claude/settings.json`) level? Codex's `hooks.json` is user-level only, so
-   user-level keeps Phase 0 symmetric; project-level is better for per-repo config
-   later.
-3. Repo layout: single package, or monorepo splitting `core` from adapters?
-   Recommendation: single package until `core` gains an outside consumer.
+- One Tier B file serves both Pi and omp. ✅ (`shared.mjs`)
+- Claude Code wiring at user level, matching Codex, keeping Phase 0 symmetric. ✅
+- Single package, not a monorepo. ✅ Split only if `core` gains an outside consumer.
 
-**Blocking Phase 1, safe to defer**
+**Still open — blocking Phase 1**
 
-4. Package name and npm scope.
-5. Public or private npm — determines whether marketplace distribution is viable.
-6. Native plugin/marketplace distribution, or npm-only? Pi and omp are free via
-   package.json keys; Claude Code and Codex each cost a manifest to maintain.
+1. Package name and npm scope.
+2. Public or private npm — determines whether marketplace distribution is viable.
+3. Native plugin/marketplace distribution, or npm-only? Pi and omp are free via
+   package.json keys; Claude Code and Codex each cost a manifest.
+4. Whether `heavyPath` should allow `cat` of a single small file inside a
+   generated tree. `cat` is unbounded by definition and guardrails do not touch
+   the disk, so it stays blocked today; `heavyPath.allow` is the escape hatch.
+   Revisit if it proves annoying in practice.

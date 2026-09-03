@@ -3,93 +3,76 @@
 Phasing, boundaries, and acceptance criteria.
 Companion to [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-**Status:** design. No code yet.
+**Status: Phase 0 — built, wired locally, dogfood in progress.**
+Not published. Phase 1 has not started and must not start until the Phase 0 exit
+criteria below are met.
 
 ---
 
 ## Phase overview
 
-| Phase | Theme | Audience | Ships |
+| Phase | Theme | Audience | State |
 |---|---|---|---|
-| **0** | **Local workflow** | **us only** | Guardrails + context injection, wired locally on our own machines |
-| **1** | Package & distribute | other people | The same code, published to npm + marketplaces/extensions |
-| **2** | Skills | — | Neutral skill content + per-harness discovery |
-| **3** | MCP | — | Server wiring + guardrail coverage over MCP tool calls |
-| 4+ | Deferred | — | Agents, commands, rules, output styles, statusline |
+| **0** | **Local workflow** | **us only** | **← we are here.** Built and wired; dogfooding |
+| **1** | Package & distribute | other people | Not started |
+| **2** | Skills | — | Not started |
+| **3** | MCP | — | Not started |
+| 4+ | Deferred | — | Backlog only |
 
 Phases 0 and 1 build **the same guardrails**. They differ only in *distribution*:
 Phase 0 wires local paths, Phase 1 wires published artifacts. Nothing from Phase 0
 is thrown away — §8 of ARCHITECTURE.md shows the two wirings side by side.
 
-Each phase is independently shippable. Phase 0 must not carry design debt for
-later phases, but it also must not build for them speculatively.
-
 ---
 
 ## Phase 0 — Local workflow (dogfood)
 
-**Goal:** guardrails that we actually run, every day, in our own projects, on all
-four harnesses — with zero publishing infrastructure.
+**Goal:** guardrails we actually run, every day, in our own projects, on all four
+harnesses — with zero publishing infrastructure.
 
 This is the real risk-retirement phase. If we won't run it ourselves for a
 fortnight without switching it off, it is not ready for anyone else.
 
-### Why local-first is not a compromise
+### Where it stands
 
-The Phase 0 iteration loop is **faster than the published one** and stays the
-permanent dev environment:
+**Done.** Core, both adapters, three guardrails, context injection, config
+layering, fail-open, 203 tests, `doctor`, `replay`, `dev-link`/`dev-unlink`.
+All four harnesses wired on the author's machine (`doctor`: 4 installed, 4 wired).
 
-- Pi and omp auto-discover `~/.{pi,omp}/agent/extensions/*.ts` and hot-reload with
-  `/reload` — edit a file, reload, done
-- Claude Code and Codex re-exec the hook shim on every tool call — edit a file,
-  next call picks it up
-- No publish, no version bump, no cache invalidation anywhere
+**Remaining: the dogfood itself.** That is a calendar item, not a code item, and
+it is the actual gate into Phase 1.
 
 ### Local wiring
 
-| Harness | Mechanism | Effort |
+| Harness | Mechanism | Reload |
 |---|---|---|
-| Pi | symlink → `~/.pi/agent/extensions/harness-kit.ts` | auto-discovered, `/reload`-able |
-| omp | symlink → `~/.omp/agent/extensions/harness-kit.ts` | auto-discovered, `/reload`-able |
-| Claude Code | absolute `node <repo>/src/tier-a/guard.cjs` in `~/.claude/settings.json` | one JSON merge |
-| Codex | absolute `node <repo>/src/tier-a/guard.cjs` in `~/.codex/hooks.json` | one JSON merge |
+| Claude Code | `jq` append to `~/.claude/settings.json` → `hooks.PreToolUse` | restart |
+| Codex | `jq` append to `~/.codex/hooks.json` → `hooks.PreToolUse` | restart |
+| Pi | `pi install <repo>` | `/reload` |
+| omp | `omp install <repo>` | `/reload` |
 
-Driven by one script, `scripts/dev-link.sh`, plus `scripts/dev-unlink.sh` to back
-it all out. No `npm link` required — symlinks and absolute paths are enough, and
-they avoid npm's global state.
+Driven by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
+Both dry-run by default, idempotent, and back up every file they edit.
 
-### In scope
+**Do not use symlinks for Tier B** — see the warning in ARCHITECTURE.md §8.0.
 
-**Core** (`src/core/`)
-- `checkTool(call) → verdict` — the single pure entry point
-- Three guardrails:
-  - `secret` — `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `credentials*`, `secrets.y?ml`; exempts `*.example` / `*.sample` / `*.template`
-  - `heavy-path` — gitignore-syntax blocklist (`node_modules`, `dist`, `.git`, `.venv`, `target`, `vendor`, `coverage`) with `!` negation
-  - `broad-glob` — `**`, `**/*`, `**/*.<ext>` at repo or worktree root
-- Bash command analysis: unwrap `bash -c`, split on `&&`/`||`/`;`, strip env-var
-  and `sudo`/`env` prefixes, allowlist build/tooling commands
-- Layered config loader + JSON schema
-- Fail-open wrapper + crash log
+### In scope — and its state
 
-**Adapters**
-- Tier A process hook (`guard.cjs`) — Claude Code + Codex, **exit 2 blocking only**
-- Tier B TS extension (`shared.ts` + `pi.ts` / `omp.ts`) — Pi + omp
-- Tool-name normalisation table per adapter
-
-**Context injection** (the non-blocking half of "hooks")
-- One shared context builder: project detection, active rules pointer, path
-  conventions
-- Claude Code / Codex: `hookSpecificOutput.additionalContext` on `UserPromptSubmit`
-- Pi / omp: `before_agent_start`
-
-**Local tooling**
-- `scripts/dev-link.sh` / `dev-unlink.sh`
-- `scripts/doctor.mjs` — detect installed harnesses + versions, verify wiring,
-  replay the crash log (becomes `hk doctor` in Phase 1)
-
-**Tests**
-- Golden fixtures: one payload per harness per guardrail, asserting identical verdicts
-- Live smoke test: `-p` / print-mode run per harness proving a real block
+| | State |
+|---|---|
+| `checkTool(payload, opts) → verdict` | ✅ |
+| `secret` guardrail | ✅ incl. globs, patch bodies, interpreter `-c`, second-command reach |
+| `heavyPath` guardrail | ✅ unbounded-read rule |
+| `broadGlob` guardrail | ✅ incl. omp's `{path}` shape |
+| Bash command analysis | ✅ role-aware; the largest file in `core/` |
+| Layered config loader | ✅ (JSON-schema validation deferred) |
+| Fail-open + crash log | ✅ three layers |
+| Tier A adapter | ✅ exit-2 blocking only |
+| Tier B adapter | ✅ one shared implementation, two entry points |
+| Context injection | ✅ — and must not name the guardrails, see ARCHITECTURE.md §11 |
+| `doctor` | ✅ asks each package manager, not the filesystem |
+| `replay` | ✅ false-positive rate against real history |
+| Tests | ✅ 203, zero dependencies |
 
 ### Out of scope for Phase 0
 
@@ -101,37 +84,46 @@ they avoid npm's global state.
 - Skills (Phase 2), MCP (Phase 3)
 - Subagents, slash commands, prompt templates, rules files, output styles, statusline
 - OpenCode (structurally Tier B; add only if actually needed)
-- Migrating existing ClaudeKit content
 
 ### Acceptance criteria
 
-1. `Read .env` is blocked on all four harnesses, with the same message.
-2. `ls node_modules` is blocked; `npm run build` is **not** blocked, on all four.
-3. `Glob **/*.ts` at repo root is blocked with a suggested narrower pattern.
-4. Deleting `src/core/guardrails/secret.mjs` breaks exactly one test file.
-5. Corrupting `core/index.mjs` fails open on every harness — no session bricked.
-6. Editing a core file changes behaviour on all four harnesses with **no** re-link
-   (at most a `/reload` on Pi/omp).
-7. `scripts/doctor.mjs` correctly reports all four as wired, with versions.
+| # | Criterion | State |
+|---|---|---|
+| 1 | `Read .env` blocked on all four, same message | ⚠️ verified live on Claude Code, Pi, omp; **Codex synthetic only** |
+| 2 | `ls node_modules` blocked, `npm run build` not, on all four | ✅ |
+| 3 | `Glob **/*.ts` at root blocked with a narrower suggestion | ✅ incl. omp's shape |
+| 4 | Guardrail modularity — removing one breaks a bounded, obvious set of tests | ⚠️ reworded; `secret` now spans three test files by design (unit, extraction, tool-shapes) |
+| 5 | Corrupting `core/index.mjs` fails open everywhere | ✅ 31 hostile payloads, 9 failure drills |
+| 6 | Editing a core file changes behaviour on all four with no re-link | ✅ |
+| 7 | `doctor` reports all four wired, with versions | ✅ |
+
+Criterion 1 is the one open technical item: **Codex has never been exercised
+live.** Its payloads here have only ever been synthetic. Close this before
+treating the dogfood as covering all four.
 
 ### Exit criteria — the gate into Phase 1
 
 Behavioural, not technical. All of:
 
-- **Used daily for 2+ weeks** across at least 2 real projects, by everyone on the team
+- **Used daily for 2+ weeks** across at least 2 real projects
 - **Zero forced disables** — not once did someone switch a guardrail off to get work done
-- **False-positive rate at zero** for a full week (a legitimate call wrongly blocked is the failure mode that kills adoption)
-- All seven acceptance criteria still green
-- Someone other than the original author has linked it from scratch using only the README
+- **Replay below 0.5%** and every remaining block one you would defend on inspection
+- All acceptance criteria green, including Codex live
+- Someone other than the original author has wired it from scratch using only the README
 
-If false positives are still appearing, stay in Phase 0 and tune. Shipping a noisy
-guardrail to other people is worse than shipping nothing.
+Read the remaining blocks; do not just watch the number. `npm run replay --verbose`
+lists them, and it reports which in-scope tools the corpus never exercised — a
+clean rate on an unexercised path means nothing.
+
+If false positives are still appearing, stay in Phase 0 and tune. Shipping a
+noisy guardrail is worse than shipping nothing.
 
 ### Explicit non-goals
 
 - Feature parity with ClaudeKit
 - Any content authoring
-- Perfect tool-name coverage — Bash/Read/Write/Edit/Glob is enough
+- Perfect tool coverage — but note that *unrecognised* is not *safe*: see
+  ARCHITECTURE.md §6
 
 ---
 
@@ -140,41 +132,18 @@ guardrail to other people is worse than shipping nothing.
 **Goal:** the Phase 0 guardrails, installable by someone who has never seen the
 repo, in one command per harness.
 
-No new guardrail behaviour. This phase is packaging, distribution, and the update
-story — nothing else.
+No new guardrail behaviour. Packaging, distribution, and the update story only.
 
-### In scope
+**In scope:** publish `@<org>/harness-kit` with `bin` entries `hk` and `hk-guard`;
+`exports` + `pi`/`omp` keys (Pi and omp then need zero generated files); semver and
+changelog; optional marketplace manifests for Claude Code and Codex; `hk init`,
+`hk update`, `hk doctor`; ownership + checksum manifest; README for a stranger;
+LICENSE, CONTRIBUTING, support policy.
 
-**npm**
-- Publish `@<org>/harness-kit`; `bin` entries `hk` and `hk-guard`
-- `exports` map + `pi` / `omp` package.json keys (Pi and omp then need **zero**
-  generated files)
-- Semver discipline; changelog
+**Out of scope:** any change to guardrail behaviour — that is a Phase 0
+regression, fix it there. Skills (Phase 2), MCP (Phase 3).
 
-**Marketplaces** (evaluate cost/benefit before committing)
-- Claude Code: `.claude-plugin/plugin.json` + `hooks/hooks.json`, marketplace repo
-  with `.claude-plugin/marketplace.json`
-- Codex: `.codex-plugin/plugin.json` + `hooks.json`, `.agents/plugins/marketplace.json`
-  (its marketplace accepts `npm:` sources directly, which may make this nearly free)
-- If adopted, all four harnesses reach zero generated files
-
-**CLI hardening**
-- `hk init --harness <list>` — write/merge wiring, replacing `dev-link.sh`
-- `hk update` — reconcile wiring, report drift
-- `hk doctor` — promoted from `scripts/doctor.mjs`
-- Ownership + checksum manifest at `~/.harness-kit/manifest.json`
-
-**External-facing**
-- README written for a stranger; per-harness install docs
-- LICENSE, CONTRIBUTING, issue templates, support policy
-- Licensing review of anything carried over from ClaudeKit
-
-### Out of scope
-
-- Any change to guardrail behaviour (that is a Phase 0 regression, fix it there)
-- Skills (Phase 2), MCP (Phase 3)
-
-### Acceptance criteria
+**Acceptance criteria**
 
 1. A fresh machine installs on each harness in one command, no repo checkout.
 2. `npm update` propagates a core change to all four harnesses with no re-init.
@@ -187,18 +156,12 @@ story — nothing else.
 
 **Goal:** author a skill once; every harness discovers it.
 
-Starting position is strong: all four support the
-[Agent Skills standard](https://agentskills.io/specification), so `SKILL.md`
-content is portable **verbatim**. The work is discovery wiring, not translation.
+All four support the [Agent Skills standard](https://agentskills.io/specification),
+so `SKILL.md` content is portable verbatim. The work is discovery wiring, not
+translation.
 
-In scope: `content/skills/` as the single source; per-harness discovery
-(Claude Code native dir; Codex plugin `"skills": "./skills/"`; Pi `skills` setting
-or `.agents/skills/`; omp `.omp/skills/`); a `harnesses:` frontmatter filter; skill
-validation in `hk doctor`; decision on native plugin publishing (both Claude Code
-and Codex carry skills in plugins, which would make this near-zero-config).
-
-Out of scope: rewriting skills, Python venv bootstrapping, third-party skill
-vendoring (licensing review required first).
+In scope: `content/skills/` as the single source; per-harness discovery; a
+`harnesses:` frontmatter filter; skill validation in `hk doctor`.
 
 Open question: prefer the shared `~/.agents/skills/` location — read by Pi today
 and the emerging cross-harness convention — over four per-harness paths?
@@ -210,16 +173,13 @@ and the emerging cross-harness convention — over four per-harness paths?
 **Goal:** declare MCP servers once; optionally extend guardrails over MCP tool calls.
 
 In scope: neutral server declarations emitted to `.mcp.json` (Claude Code, Codex),
-Pi `settings.json`, omp `mcp.json`; extending `checkTool` to MCP tool names;
-per-server enable/disable in config.
+Pi settings, omp `mcp.json`; extending `checkTool` to MCP tool names; per-server
+enable/disable.
 
-Out of scope: authoring MCP servers; credential management; the Gemini-CLI
-delegation pattern from ClaudeKit (revisit only if context cost proves to be a
-real problem).
+Note that extending guardrails over MCP means a new family of payload shapes,
+which ARCHITECTURE.md §6 says to *capture*, not guess.
 
-Note: Codex's plugin manifest carries `mcpServers` directly, and its marketplace
-supports `npm:` sources — Phase 3 may be substantially cheaper via plugin
-distribution than via file generation.
+Out of scope: authoring MCP servers; credential management.
 
 ---
 
@@ -229,8 +189,8 @@ Not scheduled. Listed so Phase 0 does not accidentally design for them.
 
 | Item | Note |
 |---|---|
-| Subagents | Claude Code + omp only; Pi has none, by design |
-| Slash commands / prompt templates | Markdown formats are ~90% identical across the three that support it |
+| Subagents | Claude Code + Codex + omp; Pi has none, by design |
+| Slash commands / prompt templates | Markdown formats ~90% identical across the three that support it |
 | Rules files | `CLAUDE.md` / `AGENTS.md` / omp `RULES.md` + `rules/*.mdc` |
 | Output styles / coding levels | Claude Code only |
 | Statusline | Claude Code, omp |
@@ -240,45 +200,46 @@ Not scheduled. Listed so Phase 0 does not accidentally design for them.
 
 ## Sequencing (Phase 0)
 
-**Step 1 — spike (highest risk first).**
-Build `core/guardrails/secret.mjs` plus **only** the Claude Code and Pi adapters:
-the two extremes, out-of-process vs in-process. Wire both by hand. If one core
-module serves both cleanly, the design holds and the rest is mechanical.
+Steps 1–7 are complete. Step 8 is the work.
 
-**Step 2 — complete Tier A.** Add Codex. Confirm exit-2 blocking behaves identically.
+| # | Step | State |
+|---|---|---|
+| 1 | Spike: `secret` + Claude Code and Pi adapters — the two extremes | ✅ |
+| 2 | Complete Tier A: add Codex, confirm exit-2 parity | ✅ code; ⚠️ never run live |
+| 3 | Complete Tier B: add omp; one file or two? | ✅ one shared implementation |
+| 4 | `dev-link.sh` | ✅ rewritten twice — see ARCHITECTURE.md §8.0 |
+| 5 | Remaining guardrails + bash allowlisting | ✅ |
+| 6 | Context injection | ✅ |
+| 7 | `doctor.mjs` + internal README | ✅ plus `replay.mjs` |
+| **8** | **Dogfood. Two weeks. Tune false positives.** | **← current** |
 
-**Step 3 — complete Tier B.** Add omp. Answer open question #2: one file or two?
-
-**Step 4 — `dev-link.sh`.** Only now is it worth automating; by this point we know
-what the four wirings actually look like.
-
-**Step 5 — remaining guardrails.** `heavy-path`, `broad-glob`, bash allowlisting.
-
-**Step 6 — context injection.**
-
-**Step 7 — `doctor.mjs` + internal README.**
-
-**Step 8 — dogfood.** Two weeks. Tune false positives. This is the longest step
-and the one most likely to be cut short — don't.
-
-Ship Step 1 before committing to the rest.
+Step 8 is the longest and the one most likely to be cut short. Don't.
 
 ---
 
-## Decisions needed
+## Decisions
 
-### Now (blocks Phase 0)
+### Resolved during Phase 0
 
-1. **Repo layout** — single package, or monorepo splitting `core` from adapters?
-   Recommendation: single package; split only if `core` gains an outside consumer.
-2. **Claude Code wiring scope** — project `.claude/settings.json` or user-level
-   `~/.claude/settings.json`? Codex `hooks.json` is user-level only, so user-level
-   keeps Phase 0 symmetric. Project-level is better for per-repo config later.
-3. **Who dogfoods** — the exit criteria require more than one person.
+| Decision | Outcome |
+|---|---|
+| Repo layout | Single package. Split only if `core` gains an outside consumer. |
+| Claude Code wiring scope | User level (`~/.claude/settings.json`), matching Codex, keeping Phase 0 symmetric. |
+| One Tier B file or two | One implementation (`shared.mjs`), two thin entry points. |
+| Language | `.mjs` throughout — no build step, no type packages. |
+| Blocking mechanism | Exit 2 + stderr exclusively. |
 
-### Later (blocks Phase 1, safe to defer)
+### Still needed
 
-4. **Package name / npm scope.**
-5. **Public or private npm** — determines whether marketplace distribution is viable.
-6. **Marketplace or npm-only** — Pi/omp are free via package keys; Claude Code and
-   Codex marketplaces cost two manifests to maintain.
+**Now (blocks the Phase 0 exit)**
+
+1. **Who dogfoods** — the exit criteria require more than one person, and
+   currently there is one.
+2. **Codex live verification** — acceptance criterion 1 is not closed.
+
+**Later (blocks Phase 1, safe to defer)**
+
+3. Package name and npm scope.
+4. Public or private npm — determines whether marketplace distribution is viable.
+5. Marketplace or npm-only — Pi/omp are free via package keys; Claude Code and
+   Codex cost a manifest each.

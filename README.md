@@ -2,8 +2,11 @@
 
 One guardrail core, four coding-agent harnesses.
 
-**Phase 0 — local only.** Nothing is published, and nothing is wired into any
-harness on this machine yet. See [SCOPE.md](./SCOPE.md) for phasing and
+**Phase 0 — local only.** Built and wired locally; nothing is published. The
+remaining Phase 0 work is a two-week dogfood, not code.
+
+New here? Start with [AGENTS.md](./AGENTS.md) — invariants and the traps that
+have already cost time. Then [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
@@ -178,5 +181,9 @@ echo '{"guardrails":{"heavyPath":{"enabled":false}}}' > ~/.harness-kit.json
 
 ## Status against Phase 0
 
-Done: core, both adapters, three guardrails, context injection, tests, doctor.
-Remaining: the two-week dogfood, which is the actual gate into Phase 1.
+Done: core, both adapters, three guardrails, context injection, tests, doctor,
+replay, and local wiring on all four harnesses.
+
+Remaining: the two-week dogfood — the actual gate into Phase 1 — plus one open
+technical item: **Codex has never been exercised live.** Its payloads here have
+only ever been synthetic. See SCOPE.md acceptance criterion 1.
