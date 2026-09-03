@@ -18,5 +18,15 @@
     "doctor": "node scripts/doctor.mjs",
     "guard": "node src/tier-a/guard.mjs",
     "replay": "node scripts/replay.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./src/tier-b/pi.mjs"
+    ]
+  },
+  "omp": {
+    "extensions": [
+      "./src/tier-b/omp.mjs"
+    ]
   }
 }

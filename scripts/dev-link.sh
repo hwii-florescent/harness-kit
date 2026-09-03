@@ -3,7 +3,7 @@
 # Wire this checkout into every harness on THIS machine, in one command.
 #
 #   Tier A (Claude Code, Codex)  a PreToolUse entry appended to their JSON config
-#   Tier B (Pi, omp)             a symlink into their extensions directory
+#   Tier B (Pi, omp)             registered via `pi install` / `omp install`
 #
 # Everything it writes is OUTSIDE the repo. It is a dry run unless you pass
 # --apply, it backs up every file it edits, and it is idempotent — re-running it
@@ -16,7 +16,7 @@
 #   bash scripts/dev-link.sh --apply          # change it
 #   bash scripts/dev-link.sh --apply --only pi,omp
 #
-# Requires jq for Tier A (Tier B needs nothing).
+# Requires jq for Tier A. Tier B uses each agent's own package manager.
 
 set -euo pipefail
 
@@ -128,12 +128,24 @@ wire_tier_a() {
 
 # ── Tier B: Pi, omp ─────────────────────────────────────────────────────────
 #
-# Both auto-discover extensions in these directories, so a symlink is the whole
-# integration — and it means edits in the repo are live after /reload.
+# Both register extensions through their own package manager, which records the
+# entry in their settings and links the checkout under their plugin directory.
+# The entry points come from the `pi` and `omp` keys in package.json.
+#
+# A symlink dropped into `~/.pi/agent/extensions/` does NOT work: neither agent
+# scans that path. This script created exactly that at first and the guardrail
+# silently never loaded — `pi list` reporting "No packages installed" while
+# doctor reported "wired" was the tell.
+
+tier_b_installed() {
+  case "$1" in
+    pi)  pi list 2>/dev/null | grep -qF "$KIT" ;;
+    omp) omp plugin list 2>/dev/null | grep -q 'harness-kit' ;;
+  esac
+}
 
 wire_tier_b() {
-  local key="$1" name="$2" bin="$3" dir="$4" src="$5"
-  local link="$dir/harness-kit.mjs"
+  local key="$1" name="$2" bin="$3"
 
   selected "$key" || return 0
 
@@ -142,25 +154,19 @@ wire_tier_b() {
     return 0
   fi
 
-  if [[ -L "$link" ]] && [[ "$(readlink "$link")" == "$src" ]]; then
+  if tier_b_installed "$key"; then
     ok "$name — already wired"
     return 0
   fi
 
-  # A regular file, or a symlink pointing somewhere else, belongs to someone
-  # else. Refuse rather than overwrite.
-  if [[ -e "$link" || -L "$link" ]] && [[ "$(readlink "$link" 2>/dev/null || true)" != "$src" ]]; then
-    fail "$name — $link already exists and is not ours, left alone"
-    FAILED=1
-    return 0
-  fi
-
-  plan "$name — symlink $link -> $src"
+  plan "$name — $bin install $KIT"
   CHANGED=1
   [[ $APPLY -eq 1 ]] || return 0
 
-  mkdir -p "$dir"
-  ln -sfn "$src" "$link"
+  if ! "$bin" install "$KIT" >/dev/null 2>&1; then
+    fail "$name — $bin install failed"
+    FAILED=1
+  fi
 }
 
 # ── run ─────────────────────────────────────────────────────────────────────
@@ -179,8 +185,8 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" \
      hooks: [{ type: "command", command: $cmd, timeout: 10 }]
    }])'
 
-wire_tier_b pi  "Pi"  pi  "$HOME/.pi/agent/extensions"  "$KIT/src/tier-b/pi.mjs"
-wire_tier_b omp "omp" omp "$HOME/.omp/agent/extensions" "$KIT/src/tier-b/omp.mjs"
+wire_tier_b pi  "Pi"  pi
+wire_tier_b omp "omp" omp
 
 echo
 if [[ $APPLY -eq 0 ]]; then

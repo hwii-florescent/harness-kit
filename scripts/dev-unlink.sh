@@ -4,7 +4,7 @@
 #
 # Removes only what points into THIS checkout:
 #   Tier A  PreToolUse entries whose command names $KIT — other hooks are kept
-#   Tier B  symlinks whose target is inside $KIT — a foreign file is left alone
+#   Tier B  the registration made by `pi install` / `omp install`
 #
 # Dry run unless you pass --apply. Backs up every file it edits.
 #
@@ -117,36 +117,43 @@ unwire_tier_a() {
 }
 
 # ── Tier B ──────────────────────────────────────────────────────────────────
+#
+# Removal goes through each agent's own package manager, matching how dev-link
+# installs. Nothing to hand-delete: the settings entry and the linked checkout
+# are both theirs to manage.
+
+tier_b_installed() {
+  case "$1" in
+    pi)  pi list 2>/dev/null | grep -qF "$KIT" ;;
+    omp) omp plugin list 2>/dev/null | grep -q 'harness-kit' ;;
+  esac
+}
 
 unwire_tier_b() {
-  local key="$1" name="$2" dir="$3"
-  local link="$dir/harness-kit.mjs"
+  local key="$1" name="$2" bin="$3"
 
   selected "$key" || return 0
 
-  if [[ ! -L "$link" ]]; then
-    if [[ -e "$link" ]]; then
-      fail "$name — $link is a regular file, not ours, left alone"
-      FAILED=1
-    else
-      skip "$name — not wired"
-    fi
+  if ! have "$bin"; then
+    skip "$name — not installed"
     return 0
   fi
 
-  local target
-  target="$(readlink "$link")"
-  case "$target" in
-    "$KIT"/*)
-      plan "$name — remove $link"
-      CHANGED=1
-      [[ $APPLY -eq 1 ]] && rm -f "$link"
-      ;;
-    *)
-      fail "$name — $link points outside the kit ($target), left alone"
-      FAILED=1
-      ;;
+  if ! tier_b_installed "$key"; then
+    skip "$name — not wired"
+    return 0
+  fi
+
+  plan "$name — remove harness-kit from $bin"
+  CHANGED=1
+  [[ $APPLY -eq 1 ]] || return 0
+
+  local done=1
+  case "$key" in
+    pi)  pi remove "$KIT" >/dev/null 2>&1 || done=0 ;;
+    omp) omp plugin uninstall harness-kit >/dev/null 2>&1 || done=0 ;;
   esac
+  [[ $done -eq 1 ]] || { fail "$name — removal command failed"; FAILED=1; }
 }
 
 # ── run ─────────────────────────────────────────────────────────────────────
@@ -156,8 +163,8 @@ printf '\n%sharness-kit%s dev-unlink  %s(%s)%s\n\n' "$YLW" "$RST" "$DIM" "$KIT" 
 
 unwire_tier_a claude "Claude Code" "$HOME/.claude/settings.json"
 unwire_tier_a codex  "Codex"       "$HOME/.codex/hooks.json"
-unwire_tier_b pi     "Pi"          "$HOME/.pi/agent/extensions"
-unwire_tier_b omp    "omp"         "$HOME/.omp/agent/extensions"
+unwire_tier_b pi     "Pi"          pi
+unwire_tier_b omp    "omp"         omp
 
 echo
 if [[ $APPLY -eq 0 ]]; then

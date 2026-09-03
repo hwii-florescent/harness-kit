@@ -36,12 +36,18 @@ function fileMentionsKit(file) {
   }
 }
 
-function symlinkToKit(file) {
-  try {
-    return fs.realpathSync(file).startsWith(KIT);
-  } catch {
-    return false;
-  }
+/**
+ * Ask the agent's own package manager, rather than looking for a file.
+ *
+ * An earlier version checked for a symlink in `~/.pi/agent/extensions/`. Neither
+ * agent scans that directory, so doctor reported "wired" for an extension that
+ * had never loaded — the guardrail was silently absent while every indicator
+ * said it was on. Ask the thing that actually decides.
+ */
+function registeredWith(bin, args, needle) {
+  const r = spawnSync(bin, args, { encoding: 'utf8', timeout: 10000 });
+  if (r.error || r.status !== 0) return false;
+  return `${r.stdout || ''}${r.stderr || ''}`.includes(needle);
 }
 
 const HARNESSES = [
@@ -64,15 +70,15 @@ const HARNESSES = [
     name: 'Pi',
     tier: 'B',
     bin: 'pi',
-    wired: () => symlinkToKit(path.join(HOME, '.pi', 'agent', 'extensions', 'harness-kit.mjs')),
-    wiring: '~/.pi/agent/extensions/harness-kit.mjs → symlink',
+    wired: () => registeredWith('pi', ['list'], KIT),
+    wiring: 'pi install <kit>',
   },
   {
     name: 'omp',
     tier: 'B',
     bin: 'omp',
-    wired: () => symlinkToKit(path.join(HOME, '.omp', 'agent', 'extensions', 'harness-kit.mjs')),
-    wiring: '~/.omp/agent/extensions/harness-kit.mjs → symlink',
+    wired: () => registeredWith('omp', ['plugin', 'list'], 'harness-kit'),
+    wiring: 'omp install <kit>',
   },
 ];
 

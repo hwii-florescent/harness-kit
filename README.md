@@ -128,8 +128,14 @@ file they edit, and accept `--only claude,pi` to wire a subset.
 Tier A entries are **appended** to `hooks.PreToolUse` with `jq` (required), never
 assigned — clobbering hooks you already have is the one unrecoverable mistake an
 installer can make. Uninstall filters that array by command path, so hooks added
-later survive. Tier B removes a symlink only when its target resolves inside this
-checkout; a foreign file of the same name is reported and left alone.
+later survive.
+
+Tier B registers through each agent's own package manager (`pi install`,
+`omp install`), which records the entry in its settings and links the checkout.
+The entry points come from the `pi` and `omp` keys in `package.json`. Dropping a
+symlink into `~/.pi/agent/extensions/` does **not** work — neither agent scans
+that path — and `doctor` asks `pi list` / `omp plugin list` rather than looking
+for a file, so it cannot report "wired" for an extension that never loaded.
 
 **Emergency off-switch**, faster than uninstalling and effective on the next tool
 call — no restart, no config surgery:
