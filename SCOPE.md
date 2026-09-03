@@ -54,7 +54,8 @@ it is the actual gate into Phase 1.
 Driven by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
 Both dry-run by default, idempotent, and back up every file they edit.
 
-**Do not use symlinks for Tier B** — see the warning in ARCHITECTURE.md §8.0.
+**Do not hand-place a loose `.mjs` in the extensions directories** — auto-discovery
+accepts only `.ts`/`.js` there. See ARCHITECTURE.md §8.0.
 
 ### In scope — and its state
 

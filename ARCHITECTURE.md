@@ -303,14 +303,22 @@ the code changes. Nothing built in Phase 0 is discarded.
 Applied by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
 Both are dry-run by default and idempotent.
 
-> **Do not drop a symlink into `~/.pi/agent/extensions/` or
-> `~/.omp/agent/extensions/`.** Neither agent scans those paths. An earlier
-> version of `dev-link.sh` did exactly that; the directory existed only because
-> the script created it, `pi list` reported "No packages installed", omp read a
-> `.env` unimpeded — and `doctor` reported "wired", because it was looking for
-> the symlink it had just made. Registration goes through each agent's own
-> package manager, and `doctor` now asks `pi list` / `omp plugin list` rather
-> than inspecting the filesystem.
+> **A loose file in `~/.pi/agent/extensions/` must be named `.ts` or `.js`.**
+> Both agents do scan that directory (and project-local `.pi/extensions/`,
+> `.omp/extensions/`), and both follow symlinks — `entry.isFile() ||
+> entry.isSymbolicLink()`. But the name filter is
+> `name.endsWith(".ts") || name.endsWith(".js")`, identical in both. An earlier
+> `dev-link.sh` linked `harness-kit.mjs`, which matched neither, so discovery
+> skipped it without an error; the guardrail never loaded while `doctor`
+> reported "wired", because it was looking for the symlink it had just made.
+>
+> A *directory* entry is resolved differently: `package.json` with a `pi`/`omp`
+> manifest key first, then `index.ts`/`index.js`. Manifest-declared paths are
+> only `stat`ed, never name-filtered — that is why our `.mjs` entry points load
+> fine through `pi install` / `omp install`, and why install is the right
+> mechanism regardless: it records the package in settings, participates in
+> `/reload` and enable/disable, and lets `doctor` ask the package manager
+> instead of the filesystem.
 
 Tier A entries are **appended** with `jq`, never assigned. Both files carry other
 hooks in practice; clobbering them is the one unrecoverable installer mistake.

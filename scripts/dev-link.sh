@@ -132,10 +132,12 @@ wire_tier_a() {
 # entry in their settings and links the checkout under their plugin directory.
 # The entry points come from the `pi` and `omp` keys in package.json.
 #
-# A symlink dropped into `~/.pi/agent/extensions/` does NOT work: neither agent
-# scans that path. This script created exactly that at first and the guardrail
-# silently never loaded — `pi list` reporting "No packages installed" while
-# doctor reported "wired" was the tell.
+# Those directories ARE auto-discovered, and symlinks ARE followed — but a loose
+# file is only picked up when its name ends in `.ts` or `.js`. This script first
+# linked `harness-kit.mjs`, which the filter skips in silence, so the guardrail
+# never loaded — `pi list` reporting "No packages installed" while doctor
+# reported "wired" was the tell. Manifest-declared paths skip that filter, which
+# is why the package-manager route carries our `.mjs` entry points fine.
 
 tier_b_installed() {
   case "$1" in

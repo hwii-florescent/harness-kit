@@ -39,10 +39,11 @@ function fileMentionsKit(file) {
 /**
  * Ask the agent's own package manager, rather than looking for a file.
  *
- * An earlier version checked for a symlink in `~/.pi/agent/extensions/`. Neither
- * agent scans that directory, so doctor reported "wired" for an extension that
- * had never loaded — the guardrail was silently absent while every indicator
- * said it was on. Ask the thing that actually decides.
+ * An earlier version checked for a symlink it had itself created in
+ * `~/.pi/agent/extensions/`. That directory is scanned, but only for `.ts` and
+ * `.js` names, so the linked `.mjs` never loaded — and doctor reported "wired"
+ * regardless, because its check was circular. The guardrail was silently absent
+ * while every indicator said it was on. Ask the thing that actually decides.
  */
 function registeredWith(bin, args, needle) {
   const r = spawnSync(bin, args, { encoding: 'utf8', timeout: 10000 });

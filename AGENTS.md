@@ -77,13 +77,30 @@ that is a bug worth fixing, not working around.
 These all *looked* correct and all reported success while being wrong. Four of
 the six were the same root mistake: assuming a shape instead of capturing it.
 
-**1. Tier B symlinks do not work.**
-Dropping a file in `~/.pi/agent/extensions/` or `~/.omp/agent/extensions/` does
-nothing — neither agent scans those paths. Registration is `pi install <repo>` /
-`omp install <repo>`, driven by the `pi` and `omp` keys in `package.json`. The
-old `doctor` looked for the symlink it had just created and reported "wired"
-while the guardrail had never loaded. `doctor` now asks `pi list` /
-`omp plugin list`.
+**1. Auto-discovery is real, but it only accepts `.ts` and `.js`.**
+Both agents *do* scan `~/.pi/agent/extensions/` and `~/.omp/agent/extensions/`
+(and project-local `.pi/extensions/`, `.omp/extensions/`), and both explicitly
+follow symlinks. The filter is the whole story:
+
+```js
+// pi: dist/core/extensions/loader.js — isExtensionFile()
+return name.endsWith(".ts") || name.endsWith(".js");   // omp: byte-identical
+```
+
+An earlier `dev-link.sh` linked `~/.pi/agent/extensions/harness-kit.mjs`.
+`.mjs` is not `.ts` or `.js`, so the scan skipped it in silence — no error, no
+warning. The symlink was never the problem; the extension was.
+
+Directory entries take a second route: a subdirectory (symlink included) is read
+for `package.json` with a `pi`/`omp` manifest key, else `index.ts`/`index.js`.
+The manifest route only `stat`s the declared path, so **`.mjs` is fine there** —
+which is why `pi install` / `omp install` works with our `./src/tier-b/*.mjs`
+entry points. Prefer install anyway: it registers in settings, supports
+`/reload` and enable/disable, and gives `doctor` something authoritative to ask.
+
+The `doctor` half of this trap stands: the old one looked for the symlink it had
+just created and reported "wired" while nothing had loaded. It now asks
+`pi list` / `omp plugin list`.
 
 **2. Naming the guardrails in injected context causes silent refusals.**
 `context.mjs` once said *"Guardrails active: secret, heavyPath, broadGlob"*.

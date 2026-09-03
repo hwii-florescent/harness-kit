@@ -167,10 +167,15 @@ later survive.
 
 Tier B registers through each agent's own package manager (`pi install`,
 `omp install`), which records the entry in its settings and links the checkout.
-The entry points come from the `pi` and `omp` keys in `package.json`. Dropping a
-symlink into `~/.pi/agent/extensions/` does **not** work — neither agent scans
-that path — and `doctor` asks `pi list` / `omp plugin list` rather than looking
-for a file, so it cannot report "wired" for an extension that never loaded.
+The entry points come from the `pi` and `omp` keys in `package.json`. Both
+agents also auto-discover `~/.pi/agent/extensions/` and
+`~/.omp/agent/extensions/`, but a loose file there must be named `.ts` or `.js`
+— an earlier `dev-link.sh` linked `harness-kit.mjs` and discovery skipped it
+silently. Manifest-declared paths are exempt from that filter, so `install` is
+both the working route for `.mjs` and the better one: it registers in settings
+and supports `/reload`. `doctor` asks `pi list` / `omp plugin list` rather than
+looking for a file, so it cannot report "wired" for an extension that never
+loaded.
 
 **Emergency off-switch**, faster than uninstalling and effective on the next tool
 call — no restart, no config surgery:
