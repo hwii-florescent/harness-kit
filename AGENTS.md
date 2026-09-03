@@ -7,6 +7,8 @@ For design rationale see [ARCHITECTURE.md](./ARCHITECTURE.md); for phasing and
 what "done" means see [SCOPE.md](./SCOPE.md).
 For how strongly each claim here is actually backed — and which harness is
 still running on assumption — see [EVIDENCE.md](./EVIDENCE.md).
+For open problems not yet started — user-approval overrides, the config-cache
+bug — see [BACKLOG.md](./BACKLOG.md).
 
 ---
 

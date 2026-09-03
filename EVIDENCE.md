@@ -55,17 +55,37 @@ it in silence.
 | Claude Code | 3,829 in-scope calls replayed from real transcripts; daily live use | Strong |
 | Pi | Real payloads captured via spy extension; loader source read; live block tests | Strong |
 | omp | Same, plus binary inspected independently of pi | Strong |
-| **Codex** | **None. No real payload has ever been observed.** | **Assumed** |
+| Codex | Payload contract + decision contract read from the shipping binary's embedded schema and error strings. **No live run ever observed.** | Contract proven; behaviour unverified |
 
-Every Codex claim in this repo is an inference:
+Three Codex claims were long carried as inferences. Two are now **proven** from
+the shipping binary (codex 0.146.0), and one is not:
 
-- `normalize.mjs:9` — that Codex sends `{ hook_event_name, tool_name: "shell",
-  tool_input: {...}, cwd }`
-- the `~/.codex/hooks.json` schema `dev-link.sh` writes, including `timeout`
-- that Codex honours `exit 2` + stderr as a block
+- **Proven.** `normalize.mjs:9` — the embedded JSON schema
+  `pre-tool-use.command.input` requires `cwd`, `hook_event_name`, `tool_name`,
+  `tool_input`, `session_id`, `tool_use_id`, `transcript_path`, `turn_id`,
+  `model` and `permission_mode`. The envelope the normaliser expects is correct.
+- **Proven.** Exit 2 + stderr is a supported block: the binary carries the error
+  `PreToolUse hook exited with code 2 but did not write a blocking reason to
+  stderr`, which only makes sense if exit 2 with a reason is the working path.
+  The binary also confirms the reasoning at `src/tier-a/guard.mjs:10-13` —
+  `PreToolUse hook returned unsupported permissionDecision:allow` and
+  `PreToolUse hook returned updatedInput without permissionDecision:allow`.
+- **Still unverified.** That any of this happens in a live session. No Codex run
+  has ever been observed firing the hook.
 
-`SCOPE.md` acceptance criterion 1 already records this. It remains the single
-largest open risk in Phase 0.
+The `~/.codex/hooks.json` shape is corroborated by the live file on this
+machine, which carries third-party `PreToolUse` entries from other tools
+alongside ours.
+
+`SCOPE.md` acceptance criterion 1 stays open on the behavioural half. See
+[BACKLOG.md](./BACKLOG.md) §3.
+
+Reproduce:
+
+```bash
+strings -n 4 ~/.codex/packages/standalone/current/bin/codex \
+  | grep -m 1 -B 78 '"title": "pre-tool-use.command.input"'
+```
 
 ### It was demonstrated live, by accident
 
@@ -124,9 +144,9 @@ matter: a guardrail that blocks everything passes the first test alone.
 
 ## The next action
 
-**Capture one real Codex payload.** It is a few minutes of work and it either
-confirms `normalize.mjs:9` or reveals that a quarter of the kit has never
-worked.
+**Run Codex once with the hook wired and watch it block.** The payload contract
+is now proven from the binary, so this is no longer a question of shape — it is
+a question of whether the hook fires and the block lands.
 
 Point Codex's PreToolUse hook at a capture shim that records and allows:
 
@@ -137,9 +157,8 @@ exit 0
 ```
 
 Run a session that touches a file, a shell command and a search, then compare
-the recorded envelopes against `normalize.mjs`. Add what you find to
-`test/tool-shapes.test.mjs`, which exists to pin real captured shapes, and
-delete the assumption from this file.
+the recorded envelopes against the schema above. Add what you find to
+`test/tool-shapes.test.mjs`, which exists to pin real captured shapes.
 
 Until then, treat Codex coverage as unverified in any status report — including
 `doctor`'s green.
