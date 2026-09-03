@@ -1,0 +1,6 @@
+node_modules/
+# Phase 0 keeps all runtime state inside the repo. See src/core/log.mjs.
+.local/
+*.log
+.DS_Store
+test/.tmp-logs/
