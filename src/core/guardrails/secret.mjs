@@ -30,6 +30,34 @@ const SAFE_SUFFIX = /\.(example|sample|template|dist|tpl)$/i;
 /** `.env.example` ends in `.example`; `example.env` does not — check both ends. */
 const SAFE_PREFIX = /^(example|sample|template)[.-]/i;
 
+/**
+ * Canonical secret filenames, used to judge whether a glob would reach one.
+ *
+ * `cat .env*` pulls the credentials into context exactly as `cat .env` does,
+ * and an agent writes it without meaning anything by it.
+ */
+const EXEMPLARS = [
+  '.env', '.env.local', '.env.production', 'credentials.json', 'credentials.yaml',
+  'secrets.yaml', 'secrets.json', 'id_rsa', 'id_ed25519', 'server.pem',
+  'private.key', 'store.p12', '.npmrc', '.netrc', '.pypirc', '.git-credentials',
+];
+
+function globReachesSecret(basename) {
+  const wildcard = basename.search(/[*?]/);
+  if (wildcard === -1) return false;
+
+  // The literal part BEFORE the first wildcard is what shows intent. `.env*`
+  // names a secret; `*.json` names a file type and matches `credentials.json`
+  // only by accident — blocking `ls *.json` would be absurd.
+  if (wildcard < 3) return false;
+
+  const re = new RegExp(`^${basename
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')}$`, 'i');
+  return EXEMPLARS.some((name) => re.test(name));
+}
+
 function isSafe(basename) {
   return SAFE_SUFFIX.test(basename) || SAFE_PREFIX.test(basename);
 }
@@ -57,7 +85,9 @@ function ruleFor(filePath, allow) {
   if (isSafe(basename)) return null;
 
   const hit = SECRET.find((re) => re.test(basename));
-  return hit ? hit.source : null;
+  if (hit) return hit.source;
+
+  return globReachesSecret(basename) ? `glob "${basename}"` : null;
 }
 
 export function check(call, config) {
@@ -79,7 +109,7 @@ export function check(call, config) {
   // Shell commands: only inspect sub-commands that are not build tooling.
   if (call.kind === KIND.SHELL && call.command) {
     for (const sub of suspectSubCommands(call.command)) {
-      for (const p of extractPaths(sub)) {
+      for (const p of extractPaths(sub, { permissive: true })) {
         const rule = ruleFor(p, allow);
         if (rule) return verdict(p, rule);
       }

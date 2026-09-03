@@ -4,7 +4,9 @@
   "private": true,
   "description": "One guardrail core, four coding-agent harnesses. Phase 0: local only.",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "exports": {
     "./core": "./src/core/index.mjs",
     "./guard": "./src/tier-a/guard.mjs",
@@ -14,6 +16,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "guard": "node src/tier-a/guard.mjs"
+    "guard": "node src/tier-a/guard.mjs",
+    "replay": "node scripts/replay.mjs"
   }
 }

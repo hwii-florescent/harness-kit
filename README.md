@@ -7,7 +7,8 @@ harness on this machine yet. See [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
-npm test              # 169 tests, no dependencies
+npm test              # 188 tests, no dependencies
+npm run replay        # false-positive rate against real agent history
 npm run doctor        # which harnesses are installed / wired
 ```
 
@@ -48,8 +49,8 @@ src/core/            checkTool, config, normalisation, bash analysis
   guardrails/        secret · heavy-path · broad-glob
 src/tier-a/guard.mjs Claude Code + Codex
 src/tier-b/          shared.mjs + pi.mjs + omp.mjs
-test/                169 tests; payloads.mjs holds the four dialects
-scripts/             doctor.mjs (read-only) · dev-link.sh (not yet run)
+test/                188 tests; payloads.mjs holds the four dialects
+scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
 ```
 
 ## Testing approach
@@ -66,6 +67,28 @@ fake `ExtensionAPI` shaped like Pi's.
 A dedicated `false positives` suite guards the Phase 0 exit criterion of a zero
 false-positive rate — `git commit -m "fix .env loading"`, `rm -rf dist`,
 `./node_modules/.bin/eslint src` and friends must all pass through.
+
+### Replay: the test that unit tests cannot be
+
+`npm run replay` walks recorded agent transcripts and feeds every tool call to
+`checkTool()`. Those calls actually ran and were overwhelmingly legitimate, so
+the blocked fraction is an empirical false-positive rate — the Phase 0 exit
+criterion, measured in seconds rather than a fortnight.
+
+It earns its place. The first run over 3,600 real calls returned **3.99%**: one
+in twenty-five legitimate commands blocked. `extractPaths` was treating every
+operand as a path, so `grep -rn "build" src` looked like a read of a directory
+named `build`, and `grep -vE "node_modules|dist/"` was blocked for naming the
+very things it excludes. No hand-written case would have found that — you have
+to already suspect the collision to write the test.
+
+The rate is now **0.87%**, and what remains is the guardrail working: `cat
+.npmrc`, `ls node_modules`, `find dist -type f`. Run it after any change to
+`bash.mjs` or a guardrail, and read the remaining blocks rather than watching
+the number — each one should be a block you would defend.
+
+`test/extraction.test.mjs` pins the classes replay uncovered so they cannot
+come back.
 
 Everything is hermetic: `HK_NO_GLOBAL_CONFIG=1` stops the config loader reading
 `~`, and crash logs are redirected under `test/`. The suite writes nothing

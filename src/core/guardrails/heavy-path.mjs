@@ -12,7 +12,7 @@
  */
 
 import { KIND } from '../normalize.mjs';
-import { suspectSubCommands, extractPaths, isContentReadCommand } from '../bash.mjs';
+import { suspectSubCommands, extractPaths, isContentReadCommand, isBoundedRead } from '../bash.mjs';
 
 /** Split a path into segments, ignoring drive letters and leading separators. */
 function segments(filePath) {
@@ -75,7 +75,15 @@ export function check(call, config) {
       if (!isContentReadCommand(sub)) continue;
       for (const p of extractPaths(sub)) {
         const rule = ruleFor(p, patterns, allow);
-        if (rule) return verdict(p, rule);
+        if (!rule) continue;
+        // Access is not the concern; volume is. A grep into one named file or
+        // an `ls` of a single path costs a few lines and is ordinary work.
+        // Is the blocked directory itself the thing being listed, or is it
+        // merely an ancestor of a specific path inside it?
+        const segs = segments(p);
+        const listingRoot = segs.length > 0 && matchSegment(segs[segs.length - 1], rule);
+        if (isBoundedRead(sub, p, { listingRoot })) continue;
+        return verdict(p, rule);
       }
     }
   }
