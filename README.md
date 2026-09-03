@@ -90,6 +90,30 @@ the number — each one should be a block you would defend.
 `test/extraction.test.mjs` pins the classes replay uncovered so they cannot
 come back.
 
+### Tool shapes are the other half of coverage
+
+A guardrail can only judge a call it understands. A tool whose payload shape the
+normaliser does not recognise is not a safe default — it is a silent hole: the
+call becomes `KIND.OTHER` with no paths, every guardrail sees nothing, and it
+passes while `doctor` still says "wired".
+
+omp is the demanding case. It has far more tools than pi and edits with
+**hashline**, which sends the whole patch as one `input` string with the target
+named inside it (`[src/app.ts#F613]`) and no `file_path` field at all. Editing
+`.env` was invisible. Its `glob` tool likewise carries the pattern in `path`
+with no `pattern` field, so `broadGlob` never fired on omp while working
+everywhere else.
+
+`test/tool-shapes.test.mjs` pins the real payloads, captured from running
+agents rather than guessed. When adding a harness, capture its tools first:
+
+```js
+// load with `omp -e spy.mjs` / `pi -e spy.mjs`
+export default function (pi) {
+  pi.on('tool_call', (e) => console.error(e.toolName, Object.keys(e.input ?? {})));
+}
+```
+
 **Replay has a blind spot, and it reports it.** A rate is only as good as its
 coverage: these transcripts contain no `Grep` or `Glob` tool calls, so the same
 bug survived in the structured-tool path — both guardrails read a Grep tool's

@@ -33,7 +33,7 @@ const TOOL_KINDS = new Map(Object.entries({
   edit: KIND.EDIT, multiedit: KIND.EDIT, apply_patch: KIND.EDIT,
   str_replace: KIND.EDIT, str_replace_editor: KIND.EDIT, notebookedit: KIND.EDIT,
   // discovery
-  glob: KIND.GLOB, find: KIND.GLOB, list_files: KIND.GLOB, ls: KIND.GLOB,
+  glob: KIND.GLOB, find: KIND.GLOB, list_files: KIND.GLOB, ls: KIND.GLOB, list: KIND.GLOB,
   grep: KIND.GREP, search: KIND.GREP, ripgrep: KIND.GREP, search_files: KIND.GREP,
 }));
 
@@ -47,6 +47,44 @@ const PATH_FIELDS = [
 
 /** On discovery tools these name a directory to search, not a file to touch. */
 const DISCOVERY_DIR_FIELDS = new Set(['path', 'dir', 'directory']);
+
+/**
+ * Fields that can carry a whole patch as one string.
+ *
+ * Not every editor takes a `file_path`. omp's hashline editor sends the entire
+ * edit as one `input` blob with the target named inside it, so a guardrail
+ * looking only at path fields sees nothing at all — including for `.env`.
+ *
+ * `content` and `text` are deliberately absent: on a Write they hold the whole
+ * file, and a document that merely quotes a diff would name paths nobody is
+ * touching. A patch arrives in one of these four.
+ */
+const PATCH_FIELDS = ['input', 'patch', 'diff', 'edits'];
+
+/** `[src/app.ts#F613]` — omp hashline. */
+const HASHLINE_TARGET = /\[([^\]\s#]+)#[A-Za-z]?\d+[^\]]*\]/g;
+
+/** `*** Update File: src/app.ts` — apply_patch, used by Codex and others. */
+const APPLY_PATCH_TARGET = /^\*\*\*\s+(?:Update|Add|Delete|Move)\s+File:\s*(.+?)\s*$/gm;
+
+/** `+++ b/src/app.ts` — unified diff. */
+const UNIFIED_DIFF_TARGET = /^\+\+\+\s+(?:b\/)?([^\s].*?)\s*$/gm;
+
+/** Pull edit targets out of a patch body. */
+function patchPaths(input) {
+  const out = [];
+  for (const field of PATCH_FIELDS) {
+    const body = input[field];
+    if (typeof body !== 'string' || !body) continue;
+    for (const re of [HASHLINE_TARGET, APPLY_PATCH_TARGET, UNIFIED_DIFF_TARGET]) {
+      re.lastIndex = 0;
+      for (const m of body.matchAll(re)) {
+        if (m[1] && m[1] !== '/dev/null') out.push(m[1]);
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * @param {object} payload  Raw hook/event payload from any harness.
@@ -69,9 +107,21 @@ export function normalize(payload = {}, extra = {}) {
   // file — broad-glob needs it separately to judge how wide the search is, and
   // it must not also appear as a target path or the two would double-count.
   const isDiscovery = kind === KIND.GLOB || kind === KIND.GREP;
-  const searchPath = isDiscovery
+  let searchPath = isDiscovery
     ? (first(input.path, input.dir, input.directory) ?? null)
     : null;
+  let globPattern = pattern;
+
+  // omp's glob tool has no `pattern` field: the whole expression arrives in
+  // `path` (`{ path: "**/*.ts" }`). Split it at the first wildcard segment so
+  // the guardrail sees the same pattern/searchPath pair every other harness
+  // sends — without this, broadGlob simply never fires on omp.
+  if (kind === KIND.GLOB && !globPattern && typeof searchPath === 'string' && /[*?[{]/.test(searchPath)) {
+    const segs = searchPath.split('/');
+    const wild = segs.findIndex((seg) => /[*?[{]/.test(seg));
+    globPattern = segs.slice(wild).join('/');
+    searchPath = wild > 0 ? segs.slice(0, wild).join('/') : null;
+  }
 
   const paths = [];
   for (const field of PATH_FIELDS) {
@@ -80,13 +130,14 @@ export function normalize(payload = {}, extra = {}) {
   }
   if (Array.isArray(input.paths)) paths.push(...input.paths.filter((p) => typeof p === 'string'));
   if (Array.isArray(input.files)) paths.push(...input.files.filter((p) => typeof p === 'string'));
+  if (kind === KIND.EDIT || kind === KIND.WRITE) paths.push(...patchPaths(input));
 
   return {
     kind,
     rawTool,
     event: first(payload.hook_event_name, payload.hookEventName, payload.event) ?? null,
     command,
-    pattern,
+    pattern: globPattern,
     searchPath,
     paths,
     cwd: first(payload.cwd, extra.cwd, process.cwd()),
