@@ -63,7 +63,10 @@ export function check(call, config) {
     if (rule) return verdict(call.searchPath, rule);
   }
 
-  if (call.pattern) {
+  // A GREP pattern is a search expression, not a path. Searching *for* the text
+  // "build" or ".env" reads neither — the paths are `searchPath` and `paths`.
+  // A GLOB pattern does name files, so it stays in scope.
+  if (call.pattern && call.kind !== KIND.GREP) {
     const rule = ruleFor(call.pattern, patterns, allow);
     if (rule) return verdict(call.pattern, rule);
   }

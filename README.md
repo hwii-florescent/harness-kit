@@ -90,6 +90,14 @@ the number — each one should be a block you would defend.
 `test/extraction.test.mjs` pins the classes replay uncovered so they cannot
 come back.
 
+**Replay has a blind spot, and it reports it.** A rate is only as good as its
+coverage: these transcripts contain no `Grep` or `Glob` tool calls, so the same
+bug survived in the structured-tool path — both guardrails read a Grep tool's
+`pattern` field as a path, blocking a search *for* the word `build` as if it
+were a read of a `build` directory. Only running a real agent with a native
+grep tool found it. Replay now lists the in-scope tools a corpus never
+exercised, so the gap is visible rather than assumed.
+
 Everything is hermetic: `HK_NO_GLOBAL_CONFIG=1` stops the config loader reading
 `~`, and crash logs are redirected under `test/`. The suite writes nothing
 outside this repo.

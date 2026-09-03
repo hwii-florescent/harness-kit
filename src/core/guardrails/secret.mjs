@@ -100,8 +100,9 @@ export function check(call, config) {
     if (rule) return verdict(p, rule);
   }
 
-  // Search patterns can name a secret file just as effectively as a path can.
-  if (call.pattern) {
+  // A glob can name a secret file just as effectively as a path can. A grep
+  // pattern cannot: searching for the string ".env" does not open it.
+  if (call.pattern && call.kind !== KIND.GREP) {
     const rule = ruleFor(call.pattern, allow);
     if (rule) return verdict(call.pattern, rule);
   }

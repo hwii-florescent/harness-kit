@@ -54,6 +54,7 @@ if (!files.length) {
 let total = 0;
 let scoped = 0;
 const blocks = [];
+const seen = new Map();
 
 for (const file of files) {
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
@@ -70,6 +71,7 @@ for (const file of files) {
       total++;
       if (!IN_SCOPE.has(block.name)) continue;
       scoped++;
+      seen.set(block.name, (seen.get(block.name) ?? 0) + 1);
 
       const verdict = checkTool({
         hook_event_name: 'PreToolUse',
@@ -94,6 +96,16 @@ const rate = scoped ? (blocks.length / scoped) * 100 : 0;
 console.log(`\n  transcripts  ${files.length}`);
 console.log(`  tool calls   ${total} total, ${scoped} in scope`);
 console.log(`  blocked      ${blocks.length}  (${rate.toFixed(2)}%)\n`);
+
+// A rate is only as good as its coverage. A tool the corpus never exercised is
+// a blind spot, not a pass — the `pattern` field of a native Grep tool was read
+// as a path for weeks while replay reported a clean rate, because these
+// transcripts contain no Grep calls at all.
+const uncovered = [...IN_SCOPE].filter((tool) => !seen.has(tool));
+if (uncovered.length) {
+  console.log(`  not exercised by this corpus: ${uncovered.join(', ')}`);
+  console.log('  → the rate above says nothing about those paths.\n');
+}
 
 const byGuardrail = new Map();
 for (const b of blocks) byGuardrail.set(b.guardrail, (byGuardrail.get(b.guardrail) ?? 0) + 1);

@@ -135,3 +135,38 @@ describe('secrets: reachable by any route', () => {
     allowed('node scripts/gen.mjs');
   });
 });
+
+describe('structured tools: a grep pattern is not a path', () => {
+  /**
+   * The same root cause as the shell cases above, surviving in a second code
+   * path. Agents that shell out to `grep` went through bash.mjs and were fixed;
+   * agents with a *native* grep tool pass { pattern, path } instead, and both
+   * guardrails were reading `pattern` as a path. Searching for the word "build"
+   * was blocked as a read of a `build` directory.
+   *
+   * Replay could not find this: the transcript corpus contained no Grep tool
+   * calls at all. It took running a real agent that has one.
+   */
+  const call = (toolName, input) => checkTool({ toolName, input }, { cwd: '/tmp' });
+
+  test('searching FOR a blocklisted word is not reading it', () => {
+    assert.equal(call('grep', { pattern: 'build', path: 'src' }).blocked, false);
+    assert.equal(call('grep', { pattern: 'dist', path: 'src' }).blocked, false);
+    assert.equal(call('search', { pattern: 'node_modules', path: 'src' }).blocked, false);
+  });
+
+  test('searching FOR a secret filename is not reading it', () => {
+    assert.equal(call('grep', { pattern: '.env', path: 'src' }).blocked, false);
+    assert.equal(call('grep', { pattern: 'credentials.json', path: 'src' }).blocked, false);
+  });
+
+  test('but searching INSIDE a generated tree still floods', () => {
+    assert.equal(call('grep', { pattern: 'x', path: 'node_modules' }).blocked, true);
+    assert.equal(call('grep', { pattern: 'x', path: 'dist/esm' }).blocked, true);
+  });
+
+  test('a glob pattern does name files, so it stays in scope', () => {
+    assert.equal(call('glob', { pattern: '.env*', path: 'src' }).blocked, true);
+    assert.equal(call('glob', { pattern: '**/*.ts', path: '.' }).blocked, true);
+  });
+});
