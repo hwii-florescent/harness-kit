@@ -113,21 +113,75 @@ describe('guardrail: secret', () => {
 // ── Heavy-path guardrail ────────────────────────────────────────────────────
 
 describe('guardrail: heavyPath', () => {
+  // Exploration is the cost. The heavy directory is the target here, or the
+  // path names no single file inside it.
   const blocked = [
-    'node_modules/react/index.js',
-    'packages/web/node_modules/lodash/get.js',
-    'dist/bundle.js', 'build/main.css', '.next/server/page.js',
-    'target/debug/app', 'vendor/autoload.php',
-    '__pycache__/mod.pyc', '.venv/lib/python3.12/site.py',
-    '.git/config', 'coverage/lcov.info',
+    'node_modules', 'dist', 'build', '.next', 'coverage', '.venv',
+    'node_modules/react', 'packages/web/node_modules',
+    'target/debug/app', '.git/config',
   ];
   for (const path of blocked) {
-    test(`blocks ${path}`, () => {
+    test(`blocks exploring ${path}`, () => {
       const v = check(claude('Read', { file_path: path }));
-      assert.equal(v.blocked, true);
+      assert.equal(v.blocked, true, path);
       assert.equal(v.guardrail, 'heavyPath');
     });
   }
+
+  // One named file inside a heavy directory is targeted access, not
+  // exploration: you must already know it is there to ask for it. These were
+  // blocked while `sed -n 1,50p <the same file>` passed, so the block never
+  // prevented the read — it taught the agent to reach for the shell instead.
+  // For an installed dependency the shipped files are also the only source
+  // there is, so "read the source that produced it" is not advice anyone can
+  // follow.
+  const targeted = [
+    'node_modules/react/index.js',
+    'packages/web/node_modules/lodash/get.js',
+    'dist/bundle.js', 'build/main.css', '.next/server/page.js',
+    'vendor/autoload.php', '__pycache__/mod.pyc',
+    '.venv/lib/python3.12/site.py', 'coverage/lcov.info',
+  ];
+  for (const path of targeted) {
+    test(`allows reading one named file: ${path}`, () => {
+      assert.equal(check(claude('Read', { file_path: path })).blocked, false, path);
+    });
+  }
+
+  test('a glob into a heavy directory is still exploration', () => {
+    assert.equal(check(claude('Glob', { pattern: 'dist/*.js' })).blocked, true);
+    assert.equal(check(claude('Read', { file_path: 'dist/*.js' })).blocked, true);
+  });
+
+  // Rule selection takes the deepest matching segment, not the first pattern in
+  // config order. Under first-match the reported rule was `node_modules` and the
+  // root check compared `dist` against it, so the deeper — and more expensive —
+  // of these two listings was the one that got through.
+  test('picks the deepest matching segment, not config order', () => {
+    for (const command of ['ls repo/pkg/dist', 'ls repo/node_modules/pkg/dist']) {
+      const v = check(claude('Bash', { command }));
+      assert.equal(v.blocked, true, command);
+      assert.equal(v.rule, 'dist', command);
+    }
+  });
+
+  // Context economy, not access control — the structured half of the rule that
+  // `rm -rf dist` and `cp x dist/` have always followed.
+  test('writing into a heavy directory costs no context', () => {
+    assert.equal(check(claude('Write', { file_path: 'dist/a.js', content: 'x' })).blocked, false);
+    assert.equal(
+      check(claude('Edit', { file_path: 'dist/a.js', old_string: 'a', new_string: 'b' })).blocked,
+      false,
+    );
+  });
+
+  test('a search root is a directory to walk; a file is one bounded read', () => {
+    assert.equal(check(claude('Grep', { pattern: 'x', path: 'node_modules/pkg' })).blocked, true);
+    assert.equal(
+      check(claude('Grep', { pattern: 'x', path: 'node_modules/pkg/dist/loader.js' })).blocked,
+      false,
+    );
+  });
 
   const allowed = [
     'src/index.ts', 'lib/distro.ts', 'src/building/plan.ts',

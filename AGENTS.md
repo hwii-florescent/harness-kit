@@ -5,6 +5,8 @@ Codex, Pi and omp (Claude Code also reads `CLAUDE.md`, which points here).
 
 For design rationale see [ARCHITECTURE.md](./ARCHITECTURE.md); for phasing and
 what "done" means see [SCOPE.md](./SCOPE.md).
+For how strongly each claim here is actually backed — and which harness is
+still running on assumption — see [EVIDENCE.md](./EVIDENCE.md).
 
 ---
 

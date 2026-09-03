@@ -33,7 +33,13 @@ describe('patch bodies name their target', () => {
     assert.deepEqual(normalize(hashline('src/app.ts')).paths, ['src/app.ts']);
     blocked(hashline('.env'), 'hashline edit of a secrets file');
     blocked(hashline('.ssh/id_' + 'rsa'), 'hashline edit of a private key');
-    blocked(hashline('node_modules/x/index.js'), 'hashline edit inside node_modules');
+    // An edit inside node_modules is no longer a heavyPath block — writing
+    // there costs no context — but the target must still be *visible*, which is
+    // the property this file exists to pin.
+    assert.deepEqual(
+      normalize(hashline('node_modules/x/index.js')).paths,
+      ['node_modules/x/index.js'],
+    );
   });
 
   test('ordinary hashline edits still pass', () => {
