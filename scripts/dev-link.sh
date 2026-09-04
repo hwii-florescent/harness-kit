@@ -34,7 +34,35 @@ GUARD="node \"$GUARD_PATH\""
 # Claude Code dispatches on tool name, so scope the hook rather than paying a
 # process spawn on tools the kit has no opinion about. Codex entries carry no
 # matcher; unknown tools normalise to KIND.OTHER and are allowed immediately.
-MATCHER="Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep"
+#
+# Derived from src/core/tools.mjs rather than typed here. This string and
+# replay.mjs's IN_SCOPE are the same list, and a tool added to one but not the
+# other is a silent hole in the worst possible direction: the hook never
+# dispatches on the new tool, so the guardrail never sees it, while replay
+# still counts it in scope and reports a clean rate for it. One list, two
+# consumers.
+#
+# The module path is passed as an argument rather than interpolated into the
+# -e source, so a $KIT containing a space or a quote cannot break out of the
+# JS string literal.
+#
+# The result is checked rather than trusted. A missing or broken module makes
+# node exit non-zero and `set -euo pipefail` aborts before anything is
+# written — but a module that merely returns an empty string exits 0, and
+# would wire `matcher: ""`: a hook that dispatches on nothing while every
+# other line this script prints still reads "wired". That is exactly the
+# presence-vs-effect trap AGENTS.md warns about, so assert the shape.
+if ! command -v node >/dev/null 2>&1; then
+  printf 'dev-link: node is required to read src/core/tools.mjs (the guard itself runs on node)\n' >&2
+  exit 70
+fi
+MATCHER="$(node --input-type=module \
+  -e 'const { buildMatcher } = await import(process.argv[1]); process.stdout.write(buildMatcher());' \
+  "$KIT/src/core/tools.mjs")"
+if [[ ! "$MATCHER" =~ ^[A-Za-z][A-Za-z0-9]*([|][A-Za-z][A-Za-z0-9]*)*$ ]]; then
+  printf 'dev-link: src/core/tools.mjs produced an unusable matcher (%s) — refusing to wire\n' "${MATCHER:-empty}" >&2
+  exit 70
+fi
 
 # Print the header comment (everything between the shebang and the first
 # blank/code line) as --help text. Range-independent so a header that grows
