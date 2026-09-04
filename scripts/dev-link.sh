@@ -2,12 +2,12 @@
 #
 # Wire this checkout into every harness on THIS machine, in one command.
 #
-#   Tier A (Claude Code, Codex)  a PreToolUse entry appended to their JSON config
+#   Tier A (Claude Code, Codex)  canonical nested PreToolUse hooks with explicit modes
 #   Tier B (Pi, omp)             registered via `pi install` / `omp install`
 #
 # Everything it writes is OUTSIDE the repo. It is a dry run unless you pass
-# --apply, it backs up every file it edits, and it is idempotent — re-running it
-# on an already-wired harness does nothing.
+# --apply, backs up every file it edits, and migrates recognized old entries
+# without clobbering unrelated hooks.
 #
 # Reverse it with scripts/dev-unlink.sh.
 #
@@ -21,7 +21,9 @@
 set -euo pipefail
 
 KIT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GUARD="node \"$KIT/src/tier-a/guard.mjs\""
+LEGACY_GUARD="node \"$KIT/src/tier-a/guard.mjs\""
+CLAUDE_GUARD="$LEGACY_GUARD --harness claude"
+CODEX_GUARD="$LEGACY_GUARD --harness codex"
 
 # Claude Code dispatches on tool name, so scope the hook rather than paying a
 # process spawn on tools the kit has no opinion about. Codex entries carry no
@@ -76,22 +78,17 @@ backup() {
 
 # ── Tier A: Claude Code, Codex ──────────────────────────────────────────────
 #
-# Both already ship other PreToolUse hooks in practice, so this APPENDS to the
-# array rather than assigning it. Clobbering a user's existing hooks is the one
-# unrecoverable mistake an installer can make.
+# A first install appends a canonical nested group. Reruns normalize this
+# checkout's legacy or mode-bearing commands in place and remove duplicates,
+# while preserving unrelated groups and handlers.
 
 wire_tier_a() {
-  local key="$1" name="$2" bin="$3" file="$4" entry="$5"
+  local key="$1" name="$2" bin="$3" file="$4" expected="$5"
 
   selected "$key" || return 0
 
   if ! have "$bin"; then
     skip "$name — not installed"
-    return 0
-  fi
-
-  if [[ -f "$file" ]] && grep -qF "$KIT" "$file" 2>/dev/null; then
-    ok "$name — already wired"
     return 0
   fi
 
@@ -108,22 +105,192 @@ wire_tier_a() {
     return 0
   fi
 
-  plan "$name — append PreToolUse hook to $file"
+  local state nested_count direct_count canonical_count
+  if [[ -f "$file" ]]; then
+    state="$(jq -r \
+      --arg expected "$expected" \
+      --arg legacy "$LEGACY_GUARD" \
+      --arg claude "$CLAUDE_GUARD" \
+      --arg codex "$CODEX_GUARD" '
+        def command_of($value):
+          if ($value | type) == "object" then $value.command else null end;
+        def is_guard($command):
+          ($command | type) == "string"
+          and ($command == $legacy or $command == $claude or $command == $codex);
+        def pretool:
+          (.hooks? // {}) as $hooks
+          | if ($hooks | type) == "object"
+              and (($hooks.PreToolUse? // []) | type) == "array"
+            then ($hooks.PreToolUse // [])
+            else []
+            end;
+        def handlers($group):
+          if ($group | type) == "object"
+              and (($group.hooks? // []) | type) == "array"
+          then ($group.hooks // [])
+          else []
+          end;
+        [ pretool[]? | handlers(.)[]? | select(is_guard(command_of(.))) ] as $nested
+        | [ pretool[]? | select(is_guard(command_of(.))) ] as $direct
+        | [
+            ($nested | length),
+            ($direct | length),
+            ([$nested[] | select(
+              (type == "object") and .type == "command" and .command == $expected
+            )] | length)
+          ]
+        | @tsv
+      ' "$file")"
+    IFS=$'\t' read -r nested_count direct_count canonical_count <<< "$state"
+  else
+    nested_count=0
+    direct_count=0
+    canonical_count=0
+  fi
+
+  if [[ "$nested_count" == 1 && "$direct_count" == 0 && "$canonical_count" == 1 ]]; then
+    ok "$name — already wired"
+    return 0
+  fi
+
+  plan "$name — normalize PreToolUse hook in $file"
   CHANGED=1
   [[ $APPLY -eq 1 ]] || return 0
 
   mkdir -p "$(dirname "$file")"
-  if [[ -f "$file" ]]; then backup "$file"; else printf '{}\n' > "$file"; fi
 
   local tmp
   tmp="$(mktemp)"
-  if jq --arg cmd "$GUARD" --arg matcher "$MATCHER" "$entry" "$file" > "$tmp"; then
-    mv "$tmp" "$file"
-  else
+  local source="$file"
+  if [[ ! -f "$source" ]]; then
+    source="$(mktemp)"
+    printf '{}' > "$source"
+  fi
+  if ! jq \
+    --arg key "$key" \
+    --arg expected "$expected" \
+    --arg legacy "$LEGACY_GUARD" \
+    --arg claude "$CLAUDE_GUARD" \
+    --arg codex "$CODEX_GUARD" \
+    --arg matcher "$MATCHER" '
+      def command_of($value):
+        if ($value | type) == "object" then $value.command else null end;
+      def is_guard($command):
+        ($command | type) == "string"
+        and ($command == $legacy or $command == $claude or $command == $codex);
+      def pretool:
+        (.hooks? // {}) as $hooks
+        | if ($hooks | type) == "object"
+            and (($hooks.PreToolUse? // []) | type) == "array"
+          then ($hooks.PreToolUse // [])
+          else []
+          end;
+      def handlers($group):
+        if ($group | type) == "object"
+            and (($group.hooks? // []) | type) == "array"
+        then ($group.hooks // [])
+        else []
+        end;
+      def set_pretool($root; $groups):
+        ($root.hooks? // {}) as $hooks
+        | (if ($hooks | type) == "object" then $hooks else {} end) as $hook_config
+        | $root
+        | .hooks = ($hook_config | .PreToolUse = $groups);
+      def has_handlers($group):
+        ((($group.hooks? // null) | type) == "array"
+          and (($group.hooks | length) > 0))
+        or (($group | type) == "object" and ($group | has("command")));
+
+      . as $root
+      | pretool as $groups
+      | [ pretool[]? | handlers(.)[]? | select(is_guard(command_of(.))) ] as $nested
+      | [ pretool[]? | select(is_guard(command_of(.))) ] as $direct
+      | if (($nested | length) + ($direct | length)) == 0 then
+          set_pretool(
+            $root;
+            $groups + [{
+              matcher: $matcher,
+              hooks: [{
+                type: "command",
+                command: $expected
+              } + (if $key == "codex" then { timeout: 10 } else {} end)]
+            }]
+          )
+        else
+          (reduce $groups[] as $group
+            ({ seen_nested: false, seen_direct: false, out: [] };
+             if ($group | type) != "object" then
+               .out += [$group]
+             else
+               (handlers($group)) as $handlers
+               | (reduce $handlers[] as $handler
+                   ({ seen: .seen_nested, touched: false, hooks: [] };
+                    if is_guard(command_of($handler)) then
+                      .touched = true
+                      | if .seen then
+                          .
+                        else
+                          .seen = true
+                          | .hooks += [(
+                              $handler
+                              | .type = "command"
+                              | .command = $expected
+                            )]
+                        end
+                    else
+                      .hooks += [$handler]
+                    end
+                   )) as $handler_result
+               | (is_guard(command_of($group))) as $direct_hit
+               | ($direct_hit
+                  and (($nested | length) == 0)
+                  and .seen_direct == false) as $first_direct
+               | if $direct_hit then .seen_direct = true else . end
+               | (
+                   if $first_direct then
+                     ($group
+                      | del(.command)
+                      | .hooks = ([
+                          { type: "command", command: $expected }
+                          + (if $key == "codex" then { timeout: 10 } else {} end)
+                        ] + $handler_result.hooks))
+                   elif $direct_hit then
+                     ($group | del(.command) | .hooks = $handler_result.hooks)
+                   elif $handler_result.touched then
+                     ($group | .hooks = $handler_result.hooks)
+                   else
+                     $group
+                   end
+                 ) as $candidate
+               | if $handler_result.touched or $direct_hit then
+                   if has_handlers($candidate) then .out += [$candidate] else . end
+                 else
+                   .out += [$candidate]
+                 end
+               | .seen_nested = $handler_result.seen
+             end
+            )
+          ) as $state
+          | set_pretool($root; $state.out)
+        end
+    ' "$source" > "$tmp"; then
     rm -f "$tmp"
+    [[ "$source" == "$file" ]] || rm -f "$source"
     fail "$name — jq failed, $file unchanged"
     FAILED=1
+    return 0
   fi
+
+  if [[ -f "$file" ]] && cmp -s "$file" "$tmp"; then
+    rm -f "$tmp"
+    [[ "$source" == "$file" ]] || rm -f "$source"
+    ok "$name — already wired"
+    return 0
+  fi
+
+  [[ -f "$file" ]] && backup "$file"
+  mv "$tmp" "$file"
+  [[ "$source" == "$file" ]] || rm -f "$source"
 }
 
 # ── Tier B: Pi, omp ─────────────────────────────────────────────────────────
@@ -176,16 +343,9 @@ wire_tier_b() {
 printf '\n%sharness-kit%s dev-link  %s(%s)%s\n\n' "$GRN" "$RST" "$DIM" "$KIT" "$RST"
 [[ $APPLY -eq 0 ]] && { say "${DIM}DRY RUN — pass --apply to make changes${RST}"; echo; }
 
-wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" \
-  '.hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{
-     matcher: $matcher,
-     hooks: [{ type: "command", command: $cmd }]
-   }])'
+wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" "$CLAUDE_GUARD"
 
-wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" \
-  '.hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{
-     hooks: [{ type: "command", command: $cmd, timeout: 10 }]
-   }])'
+wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" "$CODEX_GUARD"
 
 wire_tier_b pi  "Pi"  pi
 wire_tier_b omp "omp" omp
