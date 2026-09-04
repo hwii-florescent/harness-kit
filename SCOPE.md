@@ -35,8 +35,9 @@ fortnight without switching it off, it is not ready for anyone else.
 
 ### Where it stands
 
+
 **Done.** Core, both adapters, three guardrails, context injection, live config
-layering, fail-open behavior, 260 tests, `doctor`, `replay`, and
+layering, fail-open behavior, 274 tests, `doctor`, `replay`, and
 `dev-link`/`dev-unlink`. Tier A wiring now carries explicit harness modes;
 Tier B interactive sessions can approve one exact blocked call.
 
@@ -76,7 +77,7 @@ manifest entry points or `-e` for ad-hoc runs.
 | Context injection | ✅ — and must not name the guardrails, see ARCHITECTURE.md §11 |
 | `doctor` | ✅ defensive Tier A inspection plus package-manager checks |
 | `replay` | ✅ false-positive rate against real history |
-| Tests | ✅ 260, zero dependencies |
+| Tests | ✅ 274, zero dependencies |
 
 ### Out of scope for Phase 0
 

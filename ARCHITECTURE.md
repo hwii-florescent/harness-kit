@@ -141,7 +141,7 @@ harness-kit/
 │   └── guardrails/           secret · heavy-path · broad-glob
 ├── src/tier-a/guard.mjs      Claude Code + Codex
 ├── src/tier-b/               shared.mjs + pi.mjs + omp.mjs
-├── test/                     260 tests, node --test, no framework
+├── test/                     274 tests, node --test, no framework
 └── scripts/                  doctor · replay · dev-link · dev-unlink
 ```
 

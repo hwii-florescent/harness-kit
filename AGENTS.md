@@ -21,7 +21,7 @@ One guardrail core running unmodified on four coding agents. Three guardrails
 The remaining Phase 0 work is a two-week dogfood, not code.
 
 ```bash
-npm test        # 260 tests, zero dependencies
+npm test        # 274 tests, zero dependencies
 npm run replay  # false-positive rate against real agent history
 npm run doctor  # which harnesses are installed / wired
 ```
@@ -154,7 +154,7 @@ Run all of these after touching `bash.mjs` or any guardrail. Unit tests alone
 have missed every serious defect found so far.
 
 ```bash
-npm test                        # 260 tests
+npm test                        # 274 tests
 npm run replay -- --verbose     # rate + the actual remaining blocks
 node scripts/doctor.mjs         # wiring honest?
 ```
@@ -207,7 +207,7 @@ Phase 0's remaining work, in order:
 
 Do not start Phase 1 (publishing) until the SCOPE.md exit criteria are met.
 
-Current numbers, for comparison after a change: 260 tests, replay 34/3,993
+Current numbers, for comparison after a change: 274 tests, replay 34/3,993
 in-scope calls (0.85%). A prior red-team run covered 39 vectors; 36 passed and
 three deliberate shell-evasion cases remain outside the threat model of a
 well-meaning agent.
