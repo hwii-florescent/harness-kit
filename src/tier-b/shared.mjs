@@ -1,13 +1,14 @@
 /**
  * Tier B adapter — in-process extension. Serves Pi and omp.
  *
- * Pi and omp expose the same extension API (omp runs Pi-authored extensions
- * through a compatibility shim), so one implementation covers both. `pi.mjs`
- * and `omp.mjs` are thin re-exports; if the APIs ever diverge, they are where
- * the divergence goes.
+ * This implementation intentionally uses only the documented common subset:
+ * `pi.on`, `tool_call`, `before_agent_start`, `ctx.cwd`, `ctx.hasUI`, and
+ * `ctx.ui.confirm`. omp runs Pi-authored extensions through a compatibility
+ * shim, so one implementation covers both.
  *
- * Written as .mjs rather than .ts: both harnesses load .ts/.js/.mjs/.cjs, and
- * plain ESM means no build step and no type packages during Phase 0.
+ * The `.mjs` entry points are loaded through explicit package-manifest
+ * entries (`pi install <repo>`, `omp install <repo>`, or `omp plugin install
+ * <repo>`), or ad hoc with `-e`; do not rely on loose ambient `.mjs` links.
  */
 
 import { checkTool, buildContext } from '../core/index.mjs';
@@ -20,13 +21,22 @@ import { logCrash } from '../core/log.mjs';
  */
 export function install(pi, { harness = 'pi' } = {}) {
   // Guardrails. `{ block: true }` is Tier B's equivalent of Tier A's exit 2.
-  pi.on('tool_call', (event, ctx) => {
+  pi.on('tool_call', async (event, ctx) => {
     try {
       const verdict = checkTool(
         { toolName: event.toolName, input: event.input },
         { cwd: ctx?.cwd },
       );
-      if (verdict.blocked) return { block: true, reason: verdict.reason };
+      if (verdict.blocked) {
+        const blocked = { block: true, reason: verdict.reason };
+        if (ctx?.hasUI !== true) return blocked;
+
+        const approved = await ctx.ui.confirm(
+          'harness-kit: blocked tool call',
+          `${verdict.reason}\n\nAllow this exact tool call once?`,
+        );
+        return approved === true ? undefined : blocked;
+      }
     } catch (error) {
       logCrash(`tier-b/${harness}/tool_call`, error, { tool: event?.toolName });
     }
