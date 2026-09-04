@@ -19,7 +19,8 @@
 #   bash scripts/dev-link.sh --apply          # change it
 #   bash scripts/dev-link.sh --apply --only pi,omp
 #
-# Requires jq for Tier A. Tier B uses each agent's own package manager.
+# Requires jq and node for Tier A (node reads the tool list the hook matcher
+# is built from). Tier B uses each agent's own package manager.
 
 set -euo pipefail
 
@@ -32,38 +33,18 @@ KIT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD_PATH="$KIT/src/tier-a/guard.mjs"
 GUARD="node \"$GUARD_PATH\""
 
-# Claude Code dispatches on tool name, so scope the hook rather than paying a
-# process spawn on tools the kit has no opinion about. Codex entries carry no
-# matcher; unknown tools normalise to KIND.OTHER and are allowed immediately.
-#
-# Derived from src/core/tools.mjs rather than typed here. This string and
-# replay.mjs's IN_SCOPE are the same list, and a tool added to one but not the
-# other is a silent hole in the worst possible direction: the hook never
-# dispatches on the new tool, so the guardrail never sees it, while replay
-# still counts it in scope and reports a clean rate for it. One list, two
-# consumers.
-#
-# The module path is passed as an argument rather than interpolated into the
-# -e source, so a $KIT containing a space or a quote cannot break out of the
-# JS string literal.
-#
-# The result is checked rather than trusted. A missing or broken module makes
-# node exit non-zero and `set -euo pipefail` aborts before anything is
-# written — but a module that merely returns an empty string exits 0, and
-# would wire `matcher: ""`: a hook that dispatches on nothing while every
-# other line this script prints still reads "wired". That is exactly the
-# presence-vs-effect trap AGENTS.md warns about, so assert the shape.
-if ! command -v node >/dev/null 2>&1; then
-  printf 'dev-link: node is required to read src/core/tools.mjs (the guard itself runs on node)\n' >&2
-  exit 70
-fi
-MATCHER="$(node --input-type=module \
-  -e 'const { buildMatcher } = await import(process.argv[1]); process.stdout.write(buildMatcher());' \
-  "$KIT/src/core/tools.mjs")"
-if [[ ! "$MATCHER" =~ ^[A-Za-z][A-Za-z0-9]*([|][A-Za-z][A-Za-z0-9]*)*$ ]]; then
-  printf 'dev-link: src/core/tools.mjs produced an unusable matcher (%s) — refusing to wire\n' "${MATCHER:-empty}" >&2
-  exit 70
-fi
+# Set by derive_matcher() below, not here: deriving it eagerly made --help and
+# Tier-B-only runs fail on a machine with no node. Declared for `set -u`.
+MATCHER=""
+
+# The grammar a derived matcher must satisfy. Kept in a variable on its own
+# line so test/tools.test.mjs can read it straight out of this file and assert
+# buildMatcher() produces something that satisfies it — otherwise the shell
+# holds an untested claim about tool-name syntax that the JS side knows
+# nothing about. Allows _ . - because Claude Code MCP tools are named
+# mcp__server__tool, and a list containing one must not make the installer
+# refuse to wire anything at all.
+MATCHER_RE='^[A-Za-z][A-Za-z0-9_.-]*([|][A-Za-z][A-Za-z0-9_.-]*)*$'
 
 # Print the header comment (everything between the shebang and the first
 # blank/code line) as --help text. Range-independent so a header that grows
@@ -109,6 +90,50 @@ selected() {
   [[ -z "$ONLY" ]] && return 0
   [[ ",$ONLY," == *",$1,"* ]]
 }
+
+# Claude Code dispatches on tool name, so scope the hook rather than paying a
+# process spawn on tools the kit has no opinion about. Codex entries carry no
+# matcher; unknown tools normalise to KIND.OTHER and are allowed immediately.
+#
+# Derived from src/tier-a/tools.mjs rather than typed here, so this string and
+# replay.mjs's IN_SCOPE cannot drift apart. See that module's header.
+#
+# Called only when a Tier A harness is actually selected. It used to run
+# unconditionally at the top of the script, which made `--help`, `--only
+# pi,omp` and even the unknown-argument path die with exit 70 on a machine
+# without node. A help text that needs a working runtime to print is a
+# regression, not a safety check.
+#
+# The value is FRAMED as HK_MATCHER=<value> on its own line and extracted with
+# an anchored match, rather than read as bare stdout. Bare stdout is not safe
+# to trust: anything else writing to this process stdout without a trailing
+# newline — an APM or instrumentation preload injected via NODE_OPTIONS is the
+# realistic case — fuses onto the front of the first tool name. The result
+# ("DebugBash|Read|...") still satisfies the grammar above AND still passes
+# doctor, which only checks that `Read` is present. Bash would silently stop
+# being matched, and Bash is very nearly the entire in-scope corpus. Framing
+# makes a fused prefix fail the anchor instead of being absorbed, while noise
+# that does end in a newline is skipped.
+derive_matcher() {
+  if ! command -v node >/dev/null 2>&1; then
+    printf 'dev-link: node is required to read src/tier-a/tools.mjs (the guard itself runs on node)\n' >&2
+    exit 70
+  fi
+  local raw
+  raw="$(node --input-type=module \
+    -e 'const { pathToFileURL } = await import("node:url");
+        const { buildMatcher } = await import(pathToFileURL(process.argv[1]).href);
+        process.stdout.write("HK_MATCHER=" + buildMatcher() + "\n");' \
+    "$KIT/src/tier-a/tools.mjs")"
+  MATCHER="$(printf '%s\n' "$raw" | sed -n 's/^HK_MATCHER=//p' | tail -1)"
+  if [[ ! "$MATCHER" =~ $MATCHER_RE ]]; then
+    printf 'dev-link: could not read a usable tool matcher (got: %s)\n' "${MATCHER:-nothing}" >&2
+    printf '          expected one HK_MATCHER=<names> line from src/tier-a/tools.mjs;\n' >&2
+    printf '          check that nothing else writes to stdout under NODE_OPTIONS.\n' >&2
+    exit 70
+  fi
+}
+if selected claude || selected codex; then derive_matcher; fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -306,10 +331,15 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" PreToolUse \
 # feeds). Confirmed against both installed binaries before wiring it: Claude
 # Code 2.1.260's embedded hook docs list SessionStart as a real event with the
 # same `hookSpecificOutput.additionalContext` output shape UserPromptSubmit
-# already uses below, and Codex 0.146.0 ships a
+# used when it was still wired, and Codex 0.146.0 ships a
 # `session-start.command.output` JSON Schema with an identical
-# `{hookEventName: "SessionStart", additionalContext}` shape. No `$matcher` —
-# same reasoning as UserPromptSubmit below, there is no tool to dispatch on.
+# `{hookEventName: "SessionStart", additionalContext}` shape.
+#
+# The entry template takes no `$matcher`: there is no tool to dispatch on for a
+# session-level event. wire_tier_a passes `--arg matcher` unconditionally all
+# the same, which is safe because an unused `--arg` is a no-op to jq — the
+# explanation used to live in the UserPromptSubmit block that was removed with
+# that wiring, so it is restated here rather than left implicit.
 wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" SessionStart \
   '.hooks[$event] = ((.hooks[$event] // []) + [{
      hooks: [{ type: "command", command: $cmd, timeout: 10, statusMessage: "Checking harness-kit guardrails" }]

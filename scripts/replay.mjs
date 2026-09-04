@@ -22,14 +22,14 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { checkTool } from '../src/core/index.mjs';
-import { IN_SCOPE_TOOLS } from '../src/core/tools.mjs';
+import { IN_SCOPE_TOOLS } from '../src/tier-a/tools.mjs';
 
 const args = process.argv.slice(2);
 const verbose = args.includes('--verbose') || args.includes('-v');
 const root = args.find((a) => !a.startsWith('-')) ?? path.join(os.homedir(), '.claude', 'projects');
 
 // Tools the kit has an opinion about; everything else is allowed unread.
-// Sourced from src/core/tools.mjs — see its header for defect #9b, the bug
+// Sourced from src/tier-a/tools.mjs — see its header for defect #9b, the bug
 // this shared constant fixes (this set used to be typed out separately here
 // and in dev-link.sh's MATCHER, and they could silently drift apart).
 const IN_SCOPE = new Set(IN_SCOPE_TOOLS);

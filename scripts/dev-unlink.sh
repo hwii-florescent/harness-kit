@@ -3,8 +3,9 @@
 # Undo scripts/dev-link.sh for every harness, in one command.
 #
 # Removes only what points into THIS checkout:
-#   Tier A  every hook entry, under any event, whose command names $KIT —
-#           hooks belonging to anything else are kept
+#   Tier A  every hook entry, under any event, whose command names this
+#           checkout's src/tier-a/guard.mjs — anything else is kept, including
+#           your own hooks that happen to run other scripts from this repo
 #   Tier B  the registration made by `pi install` / `omp install`
 #
 # Dry run unless you pass --apply. Backs up every file it edits.
@@ -224,7 +225,15 @@ unwire_tier_b() {
 printf '\n%sharness-kit%s dev-unlink  %s(%s)%s\n\n' "$YLW" "$RST" "$DIM" "$KIT" "$RST"
 [[ $APPLY -eq 0 ]] && { say "${DIM}DRY RUN — pass --apply to make changes${RST}"; echo; }
 
+# Both Claude Code settings files, not just settings.json. doctor.mjs reads
+# settings.json AND settings.local.json when deciding whether this kit is
+# wired, so removing from only the first left an asymmetry you could get stuck
+# in: an entry in settings.local.json kept doctor reporting the kit as wired
+# (or kept nagging about a stale entry) with no command able to clear it.
+# unwire_tier_a already skips files that do not exist, so listing both is safe
+# on a machine that only has one.
 unwire_tier_a claude "Claude Code" "$HOME/.claude/settings.json"
+unwire_tier_a claude "Claude Code" "$HOME/.claude/settings.local.json"
 unwire_tier_a codex  "Codex"       "$HOME/.codex/hooks.json"
 unwire_tier_b pi     "Pi"          pi
 unwire_tier_b omp    "omp"         omp
