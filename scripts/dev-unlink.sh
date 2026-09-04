@@ -100,22 +100,45 @@ unwire_tier_a() {
 
   local tmp
   tmp="$(mktemp)"
-  # Drop an entry when any command it carries names this checkout. Commands are
-  # read from both shapes: nested under .hooks, and bare on the entry.
+  # Remove only owned handlers. If a group also contains unrelated handlers,
+  # retain the group and its metadata instead of deleting the user's hooks.
   if jq --arg kit "$KIT" '
-        .hooks.PreToolUse = ((.hooks.PreToolUse // []) | map(select(
-          ([ .command // empty, (.hooks[]?.command // empty) ]
-             | map(contains($kit)) | any) | not
-        )))
+        def owned($value):
+          if ($value | type) == "string" then ($value | contains($kit)) else false end;
+        def clean_group:
+          if (type != "object") then .
+          elif owned(.command) then
+            del(.command)
+            | if (.hooks? | type) == "array" then
+                .hooks |= map(select(owned(.command) | not))
+                | if (.hooks | length) == 0 then empty else . end
+              else empty
+              end
+          elif ((.hooks? | type) == "array")
+            and any(.hooks[]; owned(.command)) then
+            .hooks |= map(select(owned(.command) | not))
+            | if (.hooks | length) == 0 then empty else . end
+          else .
+          end;
+        if ((.hooks? | type) == "object")
+          and ((.hooks.PreToolUse? | type) == "array")
+        then .hooks.PreToolUse |= map(clean_group)
+        else .
+        end
       ' "$file" > "$tmp"; then
-    mv "$tmp" "$file"
+    if cmp -s "$file" "$tmp"; then
+      rm -f "$tmp"
+      ok "$name — no owned PreToolUse entry"
+    else
+      mv "$tmp" "$file"
+    fi
   else
     rm -f "$tmp"
     fail "$name — jq failed, $file unchanged"
     FAILED=1
   fi
-}
 
+}
 # ── Tier B ──────────────────────────────────────────────────────────────────
 #
 # Removal goes through each agent's own package manager, matching how dev-link
