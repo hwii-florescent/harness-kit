@@ -35,45 +35,47 @@ fortnight without switching it off, it is not ready for anyone else.
 
 ### Where it stands
 
-**Done.** Core, both adapters, three guardrails, context injection, config
-layering, fail-open, 203 tests, `doctor`, `replay`, `dev-link`/`dev-unlink`.
-All four harnesses wired on the author's machine (`doctor`: 4 installed, 4 wired).
+**Done.** Core, both adapters, three guardrails, context injection, live config
+layering, fail-open behavior, 225 core tests / 274 assembled, `doctor`, `replay`,
+`dev-link`/`dev-unlink`. Tier A wiring now carries explicit harness modes;
+Tier B interactive sessions can approve one exact blocked call.
 
 **Remaining: the dogfood itself.** That is a calendar item, not a code item, and
-it is the actual gate into Phase 1.
+it is the actual gate into Phase 1. Codex live behavior remains unverified.
 
 ### Local wiring
 
 | Harness | Mechanism | Reload |
 |---|---|---|
-| Claude Code | `jq` append to `~/.claude/settings.json` → `hooks.PreToolUse` | restart |
-| Codex | `jq` append to `~/.codex/hooks.json` → `hooks.PreToolUse` | restart |
+| Claude Code | `jq` migration to canonical nested `hooks.PreToolUse` with `--harness claude` | restart |
+| Codex | `jq` migration to canonical nested `hooks.PreToolUse` with `--harness codex` | restart |
 | Pi | `pi install <repo>` | `/reload` |
-| omp | `omp install <repo>` | `/reload` |
+| omp | `omp install <repo>` or `omp plugin install <repo>` | `/reload` |
 
 Driven by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
 Both dry-run by default, idempotent, and back up every file they edit.
 
-**Do not hand-place a loose `.mjs` in the extensions directories** — auto-discovery
-accepts only `.ts`/`.js` there. See ARCHITECTURE.md §8.0.
+Do not hand-place a loose `.mjs` in the ambient extension directories —
+auto-discovery accepts only `.ts`/`.js` there. Use the explicit package
+manifest entry points or `-e` for ad-hoc runs.
 
 ### In scope — and its state
 
 | | State |
 |---|---|
-| `checkTool(payload, opts) → verdict` | ✅ |
+| `checkTool(payload, opts) → verdict` | ✅ — one global decision |
 | `secret` guardrail | ✅ incl. globs, patch bodies, interpreter `-c`, second-command reach |
 | `heavyPath` guardrail | ✅ unbounded-read rule |
 | `broadGlob` guardrail | ✅ incl. omp's `{path}` shape |
 | Bash command analysis | ✅ role-aware; the largest file in `core/` |
-| Layered config loader | ✅ (JSON-schema validation deferred) |
+| Layered config loader | ✅ re-reads global, project, and local layers every call |
 | Fail-open + crash log | ✅ three layers |
-| Tier A adapter | ✅ exit-2 blocking only |
-| Tier B adapter | ✅ one shared implementation, two entry points |
+| Tier A adapter | ✅ Claude `PreToolUse ask`; Codex and non-prompting Claude exit 2 |
+| Tier B adapter | ✅ shared async handler; one exact-call UI approval, no-UI block |
 | Context injection | ✅ — and must not name the guardrails, see ARCHITECTURE.md §11 |
-| `doctor` | ✅ asks each package manager, not the filesystem |
+| `doctor` | ✅ defensive Tier A inspection plus package-manager checks |
 | `replay` | ✅ false-positive rate against real history |
-| Tests | ✅ 203, zero dependencies |
+| Tests | ✅ 225 core; 274 assembled, zero dependencies |
 
 ### Out of scope for Phase 0
 
@@ -96,8 +98,12 @@ accepts only `.ts`/`.js` there. See ARCHITECTURE.md §8.0.
 | 4 | Guardrail modularity — removing one breaks a bounded, obvious set of tests | ⚠️ reworded; `secret` now spans three test files by design (unit, extraction, tool-shapes) |
 | 5 | Corrupting `core/index.mjs` fails open everywhere | ✅ 31 hostile payloads, 9 failure drills |
 | 6 | Editing a core file changes behaviour on all four with no re-link | ✅ |
-| 7 | `doctor` reports all four wired, with versions | ✅ |
+| 7 | `doctor` reports structural wiring/registration and versions; live loading is checked separately | ✅ |
 
+`doctor` is deliberately not a claim that a Tier B extension handler loaded:
+package-manager registration is necessary but the live block/pass smoke is the
+execution proof. Codex's live block remains the only open technical acceptance
+item.
 Criterion 1 is the one open technical item: **Codex has never been exercised
 live.** Its payloads here have only ever been synthetic. Close this before
 treating the dogfood as covering all four.
@@ -228,7 +234,9 @@ Step 8 is the longest and the one most likely to be cut short. Don't.
 | Claude Code wiring scope | User level (`~/.claude/settings.json`), matching Codex, keeping Phase 0 symmetric. |
 | One Tier B file or two | One implementation (`shared.mjs`), two thin entry points. |
 | Language | `.mjs` throughout — no build step, no type packages. |
-| Blocking mechanism | Exit 2 + stderr exclusively. |
+| Core blocking decision | One global verdict; adapters translate it per harness. |
+| Interactive approval scope | Exact tool call, one use, no persisted approval state. |
+| Config reload | Read all active layers on every call, including long-lived Tier B sessions. |
 
 ### Still needed
 

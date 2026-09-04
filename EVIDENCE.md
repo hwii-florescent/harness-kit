@@ -52,10 +52,63 @@ it in silence.
 
 | Harness | Evidence | Strength |
 |---|---|---|
-| Claude Code | 3,829 in-scope calls replayed from real transcripts; daily live use | Strong |
+| Claude Code | Daily live use; replay corpus: 4,248 calls, 3,993 in scope, 34 blocked (0.85%) | Strong |
 | Pi | Real payloads captured via spy extension; loader source read; live block tests | Strong |
 | omp | Same, plus binary inspected independently of pi | Strong |
 | Codex | Payload contract + decision contract read from the shipping binary's embedded schema and error strings. **No live run ever observed.** | Contract proven; behaviour unverified |
+
+### Adapter approval evidence
+
+The approval contract is intentionally different at the adapter boundary while
+the core verdict remains shared:
+
+- **Claude Code 2.1.260:** the Tier A tests assert the exact
+  `PreToolUse` `hookSpecificOutput.permissionDecision:"ask"` response for
+  interactive/default mode, and exit 2 with stderr for `dontAsk` and
+  `bypassPermissions`. This implementation does not register
+  `PermissionRequest`.
+- **Pi 0.84.2 and omp 18.1.10:** the shared Tier B tests await an async
+  `tool_call` handler, assert one literal-`true` `ctx.ui.confirm()` approval,
+  and assert that a non-`true` result or no UI keeps the original
+  `{block:true,reason}`. A confirmation exception fails open and is logged.
+- **Codex 0.146.0:** the Tier A tests keep exit 2 plus stderr and empty stdout.
+  No `ask` response is emitted because the installed runtime rejects it.
+
+These focused tests exercise the captured adapter surfaces. They do not
+substitute for an end-to-end run of each installed harness; the live Codex
+acceptance item remains open.
+
+---
+
+## Configuration reload evidence
+
+`test/config.test.mjs` drives repeated `checkTool()` calls in one process while
+creating, rewriting, and deleting project configuration. The next call observes
+each change, including malformed layers falling back to protective defaults.
+This covers the long-lived Pi/omp process case without touching the developer's
+global configuration.
+
+---
+
+## Wiring evidence
+
+Tier A wiring tests use temporary `HOME` files and fake harness executables.
+They verify canonical nested commands, legacy migration, duplicate removal,
+unrelated-handler preservation, invalid-JSON immutability, dry-run behavior,
+backup creation, and idempotent reruns. `doctor` can prove this structural
+registration; only a live block/pass smoke can prove that an extension or hook
+actually loaded.
+
+---
+
+## Codex contract boundary
+
+The Codex envelope and decision contract are proven from the installed binary,
+but hook execution in a live Codex session is not.
+
+---
+
+<!-- The detailed Codex schema evidence below is retained for reproducibility. -->
 
 Three Codex claims were long carried as inferences. Two are now **proven** from
 the shipping binary (codex 0.146.0), and one is not:
@@ -78,7 +131,7 @@ machine, which carries third-party `PreToolUse` entries from other tools
 alongside ours.
 
 `SCOPE.md` acceptance criterion 1 stays open on the behavioural half. See
-[BACKLOG.md](./BACKLOG.md) §3.
+[BACKLOG.md](./BACKLOG.md) §2.
 
 Reproduce:
 
@@ -87,7 +140,7 @@ strings -n 4 ~/.codex/packages/standalone/current/bin/codex \
   | grep -m 1 -B 78 '"title": "pre-tool-use.command.input"'
 ```
 
-### It was demonstrated live, by accident
+### A synthetic probe also showed the failure mode
 
 While probing something unrelated, a plausible-looking Codex payload was typed
 from memory:
@@ -122,12 +175,11 @@ hypothesis, however confidently it is phrased.
 
 Cheap to check, and it is what turned a day of speculation into twenty minutes.
 
-### 2. Make `doctor` prove loading, not registration
+### 2. Keep `doctor` separate from loading
 
-`doctor` currently asks `pi list` / `omp plugin list`. That is a real
-improvement on the circular filesystem check it replaced, but it proves the
-package is **registered**, not that the extension **loaded** and its handler is
-attached. Those two came apart once already.
+`doctor` proves canonical Tier A wiring and Tier B package registration. It does
+not prove that the extension loaded or that the handler is attached. Those two
+came apart once already.
 
 The only proof is an end-to-end block. AGENTS.md already prescribes it by hand:
 

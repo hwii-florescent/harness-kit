@@ -3,7 +3,8 @@
 One authored kit, four coding-agent harnesses.
 
 **Status:** Phase 0 implemented and wired locally. Not published.
-**Last verified:** 2026-09-03, against the installed CLIs and by running real agents.
+**Last verified:** 2026-09-04, against installed CLIs, captured payloads, and
+focused tests; Codex live execution remains unverified.
 
 Companion documents: [SCOPE.md](./SCOPE.md) for phasing, [AGENTS.md](./AGENTS.md)
 for orientation if you are picking this up cold.
@@ -29,11 +30,11 @@ been a silent one — a guardrail reporting itself active while absent. See §11
 Verified against installed CLIs, and — where marked — by running the agent and
 observing what it actually does.
 
-| | **Claude Code** `2.1.259` | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.6` |
+| | **Claude Code** `2.1.260` | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.10` |
 |---|---|---|---|---|
 | Interception model | process hook | process hook | in-process ESM | in-process ESM |
 | Hook config | `~/.claude/settings.json` → `hooks` | `~/.codex/hooks.json` | — (extensions) | — (extensions) |
-| Can block a tool call | ✅ verified | ✅ | ✅ verified | ✅ verified |
+| Can block a tool call | ✅ verified | ⚠️ exit-2 contract; live unverified | ✅ verified | ✅ verified |
 | Extension registration | — | — | `pi install <path>` | `omp install <path>` |
 | Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | `package.json` `pi` key | `package.json` `omp` key |
 | Marketplace manifest | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` | — (npm/git direct) | — (npm/git direct) |
@@ -57,7 +58,7 @@ Claude Code and Codex expose a near-identical event set.
 | `PreCompact` | ✅ | ✅ |
 | `PostCompact` | — | ✅ |
 | `Stop` | ✅ | ✅ |
-| `PermissionRequest` | — | ✅ |
+| `PermissionRequest` | ✅ documented (not used) | ✅ documented (not used) |
 
 Pi/omp equivalents (event-bus names): `tool_call` (≈ PreToolUse, can block),
 `tool_result` (≈ PostToolUse), `before_agent_start` (≈ UserPromptSubmit),
@@ -68,24 +69,29 @@ The kit uses exactly two: **`PreToolUse` / `tool_call`** and
 
 ### 2.2 Hook wire format
 
-Both process-tier harnesses read JSON on stdin and accept a JSON response on
-stdout under `hookSpecificOutput`.
+Both process-tier harnesses read JSON on stdin and accept hook-specific JSON on
+stdout. The core still makes one harness-independent decision; adapters own the
+translation needed by each runtime.
 
-**Divergence:** Codex reserves `permissionDecision: "allow"` for responses that
-also supply `updatedInput`. A bare `"allow"` can trip its hook validation.
+**Codex divergence:** Codex reserves `permissionDecision: "allow"` for
+responses that also supply `updatedInput`, and its installed runtime rejects
+`permissionDecision: "ask"`. The kit therefore never sends `ask` to Codex.
 
-**Therefore the universal contract is the exit code, not the JSON:**
-
-| Outcome | Universal mechanism | Works on |
+| Outcome | Adapter translation | Applies to |
 |---|---|---|
 | Allow | `exit 0`, no stdout | Claude Code, Codex |
-| **Block** | **`exit 2`, reason on stderr** | **Claude Code, Codex** |
+| **Block** | **`exit 2`, reason on stderr** | Codex; Claude `dontAsk`/`bypassPermissions` |
+| **Request approval** | `exit 0` plus `PreToolUse` `permissionDecision: "ask"` JSON | Claude interactive/default |
 | Inject context | `hookSpecificOutput.additionalContext` | Claude Code, Codex |
+| **Block** | **`{block:true, reason}`** after a non-`true` confirmation result or no UI | Pi, omp |
 
-One shim, byte-identical, no per-harness branching in the blocking path.
+Pi and omp await `ctx.ui.confirm()` only when `ctx.hasUI === true`; a literal
+`true` allows that exact call once. A non-`true` result keeps the original block,
+while a confirmation exception fails open. The
+documented Claude `PermissionRequest` event exists, but this implementation does
+not register it.
 
 ---
-
 ## 3. The core insight: two tiers, not four adapters
 
 ```
@@ -99,15 +105,18 @@ One shim, byte-identical, no per-harness branching in the blocking path.
              ▼                                    ▼
    ┌───────────────────────┐         ┌────────────────────────┐
    │ Tier A — process hook │         │ Tier B — extension     │
-   │ stdin JSON → exit 0|2 │         │ pi.on("tool_call", …)  │
+   │ stdin JSON → adapter  │         │ pi.on("tool_call", …)  │
    ├───────────────────────┤         ├────────────────────────┤
    │ Claude Code           │         │ Pi                     │
    │ Codex                 │         │ omp                    │
    └───────────────────────┘         └────────────────────────┘
 ```
 
-Tier A is 69 lines; Tier B is 48, plus two entry points of a dozen lines each.
-Everything else is shared.
+Tier A is one shared stdin/decision path with explicit harness-mode output:
+Claude can return a native one-shot `ask`, while Codex and Claude's
+non-prompting modes retain exit 2 + stderr. Tier B is one shared async handler:
+interactive Pi/omp sessions can confirm one exact call, while no-UI sessions
+return the normal block object.
 
 **Answered:** one Tier B implementation serves both Pi and omp (`shared.mjs`);
 `pi.mjs` and `omp.mjs` are thin re-exports differing only in a crash-log label.
@@ -133,13 +142,15 @@ harness-kit/
 │   └── guardrails/           secret · heavy-path · broad-glob
 ├── src/tier-a/guard.mjs      Claude Code + Codex
 ├── src/tier-b/               shared.mjs + pi.mjs + omp.mjs
-├── test/                     203 tests, node --test, no framework
+├── test/                     225 core tests; 274 on the assembled stack, node --test, no framework
 └── scripts/                  doctor · replay · dev-link · dev-unlink
 ```
 
 **`.mjs` throughout, not `.cjs` + `.ts`.** Both process harnesses run
-`node <file>`, so CJS buys nothing; Pi and omp load `.ts/.js/.mjs/.cjs`, so plain
-ESM means no build step and no type packages in Phase 0.
+`node <file>`, so CJS buys nothing. Pi and omp load the `.mjs` entry points
+through explicit package-manifest registration; loose ambient extension scans
+accept only `.ts`/`.js`. Plain ESM means no build step and no type packages in
+Phase 0.
 
 ### package.json keys that matter
 
@@ -295,10 +306,10 @@ the code changes. Nothing built in Phase 0 is discarded.
 
 | Harness | Wiring | Reload |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` → append to `hooks.PreToolUse` | restart |
-| Codex | `~/.codex/hooks.json` → append to `hooks.PreToolUse` | restart |
+| Claude Code | `~/.claude/settings.json` → canonical nested `hooks.PreToolUse` command with `--harness claude` | restart |
+| Codex | `~/.codex/hooks.json` → canonical nested `hooks.PreToolUse` command with `--harness codex` | restart |
 | Pi | `pi install <repo>` — registers in settings, links the checkout | `/reload` |
-| omp | `omp install <repo>` — same | `/reload` |
+| omp | `omp install <repo>` or `omp plugin install <repo>` | `/reload` |
 
 Applied by `scripts/dev-link.sh --apply`, reversed by `scripts/dev-unlink.sh --apply`.
 Both are dry-run by default and idempotent.
@@ -320,13 +331,16 @@ Both are dry-run by default and idempotent.
 > `/reload` and enable/disable, and lets `doctor` ask the package manager
 > instead of the filesystem.
 
-Tier A entries are **appended** with `jq`, never assigned. Both files carry other
-hooks in practice; clobbering them is the one unrecoverable installer mistake.
+Tier A entries are managed with `jq`, never assigned wholesale. A first install
+appends the canonical nested group; reruns migrate recognized mode-less, direct,
+wrong-mode, and duplicate harness-kit entries while preserving unrelated hooks.
 Uninstall filters the array by command path so hooks added later survive.
 
 Because Tier B registration links the checkout rather than copying it, and Tier A
 re-execs the shim per tool call, an edit to `core/` is live everywhere with no
-re-link — at most a `/reload`.
+re-link — at most a `/reload` for a long-lived Tier B extension. Registration is
+not proof that a Tier B extension loaded; the live block/pass smoke is the
+execution check.
 
 ### 8.1 Phase 1 — published (other people)
 
@@ -367,8 +381,10 @@ harness. **No per-harness configuration exists anywhere in the kit.**
 }
 ```
 
-Config is read per call, so a change takes effect on the next tool call with no
-restart. That makes it the emergency off-switch:
+The loader reads all active layers on every call, so edits take effect on the
+next call even in long-lived Pi and omp sessions. Missing or malformed files are
+ignored and later layers still apply. Persistent exceptions use `allow` for
+`secret` and `heavyPath`, or `enabled:false` for `broadGlob`.
 
 ```bash
 echo '{"guardrails":{"heavyPath":{"enabled":false}}}' > ~/.harness-kit.json
@@ -400,14 +416,15 @@ those the config kill switch is the escape hatch.
 
 | Risk | Mitigation |
 |---|---|
-| **Silent absence** — a guardrail reporting active while never loading | `doctor` asks each agent's package manager, never the filesystem; live block test per harness before trusting a wiring change |
+| **Silent absence** — a guardrail reporting active while never loading | `doctor` asks each agent's package manager for registration, and live block/pass tests prove execution |
 | **Unrecognised tool shape** — new tool ⇒ `KIND.OTHER` ⇒ no guardrail | Capture payloads with the spy extension (§6) before trusting; `test/tool-shapes.test.mjs` pins real captures |
 | **Replay blind spots** — a clean rate on paths a corpus never exercised | `replay.mjs` lists in-scope tools the corpus never hit and says the rate is silent about them |
 | **False positives** | Role-aware extraction; bounded-read rule; replay against real history after every guardrail change |
 | **Context injection causing pre-emptive refusal** | The injected text must not name the guardrails — see below |
 | **omp release velocity** (compiled binary, frequent releases) | Target only the documented extension event API; `doctor` version-checks |
 | **Codex payloads never captured live** | Spy on a real Codex session before Phase 1 |
-| **Codex `permissionDecision: "allow"` validation** | Exit-2 blocking exclusively |
+| **Interactive approval divergence** | Claude uses `PreToolUse ask`; Pi/omp use guarded `ctx.ui.confirm`; Codex and no-UI runs retain exit-2/object blocking |
+| **Codex `permissionDecision: "ask"` validation** | Never send `ask` to Codex; retain exit-2 blocking |
 
 ### The injected-context trap
 
@@ -432,6 +449,11 @@ anticipate one**. Do not reintroduce guardrail names there.
 - One Tier B file serves both Pi and omp. ✅ (`shared.mjs`)
 - Claude Code wiring at user level, matching Codex, keeping Phase 0 symmetric. ✅
 - Single package, not a monorepo. ✅ Split only if `core` gains an outside consumer.
+- Core verdicts remain global and identical; interactive grants are exact-call,
+  one-use decisions with no persisted approval state. ✅
+- Claude's `PreToolUse permissionDecision: "ask"` is used instead of the
+  documented `PermissionRequest` event; Codex remains strict. ✅
+- Configuration is re-read on every call, including long-lived Tier B sessions. ✅
 
 **Still open — blocking Phase 1**
 

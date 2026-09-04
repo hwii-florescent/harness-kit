@@ -7,8 +7,8 @@ For design rationale see [ARCHITECTURE.md](./ARCHITECTURE.md); for phasing and
 what "done" means see [SCOPE.md](./SCOPE.md).
 For how strongly each claim here is actually backed — and which harness is
 still running on assumption — see [EVIDENCE.md](./EVIDENCE.md).
-For open problems not yet started — user-approval overrides, the config-cache
-bug — see [BACKLOG.md](./BACKLOG.md).
+For open problems not yet started — Codex approval and live verification, plus
+the shell-variable limit — see [BACKLOG.md](./BACKLOG.md).
 
 ---
 
@@ -21,7 +21,7 @@ One guardrail core running unmodified on four coding agents. Three guardrails
 The remaining Phase 0 work is a two-week dogfood, not code.
 
 ```bash
-npm test        # 203 tests, zero dependencies
+npm test        # 225 core tests; 274 on the assembled stack
 npm run replay  # false-positive rate against real agent history
 npm run doctor  # which harnesses are installed / wired
 ```
@@ -41,14 +41,18 @@ has practical consequences:
 - Heredoc bodies are stripped before analysis, so `python3 - <<'PY' … PY` and
   `cat > f <<'EOF' … EOF` pass. Putting test fixtures in a heredoc-written file
   is the clean way around the first problem.
-- The escape hatch, effective on the next tool call with no restart:
+- The persistent escape hatch is effective on the next tool call with no
+  restart. Use `allow` for `secret`/`heavyPath`, or `enabled:false` for
+  `broadGlob`.
 
   ```bash
   echo '{"guardrails":{"secret":{"enabled":false}}}' > ~/.harness-kit.json
   ```
 
-  Remove the file when done. Do not leave it lying around — a disabled guardrail
-  that nobody notices is the failure this whole kit exists to avoid.
+  Remove the file when done — a disabled guardrail that nobody notices is the
+  failure this whole kit exists to avoid. Interactive Claude, Pi, and omp
+  approvals are exact-call and one-use; they are not persisted. Codex and
+  no-UI runs remain blocked.
 
 Fail-open covers crashes, not correct-but-wrong blocks. If a block is wrong,
 that is a bug worth fixing, not working around.
@@ -62,8 +66,12 @@ that is a bug worth fixing, not working around.
 2. **Adapters do not normalise.** They pass the raw payload through;
    `normalize.mjs` owns every dialect. Normalisation in two places drifts, and
    the drift is silent.
-3. **Blocking is `exit 2` + stderr** for Tier A, `{block:true, reason}` for
-   Tier B. Never `permissionDecision` — Codex rejects a bare `"allow"`.
+3. **Adapter translations are explicit.** Claude's interactive/default
+   `PreToolUse` block returns `permissionDecision:"ask"`; Claude
+   `dontAsk`/`bypassPermissions` and Codex return exit 2 + stderr; Pi and omp
+   return `{block:true,reason}` after a non-`true` result or without UI, while
+   confirmation exceptions fail open. Never send `permissionDecision:"ask"` to
+   Codex.
 4. **Everything fails open.** Any internal error allows the call and appends to
    `<kit>/.local/crash.jsonl`.
 5. **`secret` and `heavyPath` use different extraction on purpose.** Do not
@@ -103,8 +111,9 @@ entry points. Prefer install anyway: it registers in settings, supports
 `/reload` and enable/disable, and gives `doctor` something authoritative to ask.
 
 The `doctor` half of this trap stands: the old one looked for the symlink it had
-just created and reported "wired" while nothing had loaded. It now asks
-`pi list` / `omp plugin list`.
+just created and reported "wired" while nothing had loaded. It now checks the
+canonical Tier A command and asks `pi list` / `omp plugin list` for Tier B
+registration. A live block/pass smoke is still the proof that a handler loaded.
 
 **2. Naming the guardrails in injected context causes silent refusals.**
 `context.mjs` once said *"Guardrails active: secret, heavyPath, broadGlob"*.
@@ -145,7 +154,7 @@ Run all of these after touching `bash.mjs` or any guardrail. Unit tests alone
 have missed every serious defect found so far.
 
 ```bash
-npm test                        # 203 tests
+npm test                        # 225 core tests; 274 on the assembled stack
 npm run replay -- --verbose     # rate + the actual remaining blocks
 node scripts/doctor.mjs         # wiring honest?
 ```
@@ -172,7 +181,7 @@ src/core/index.mjs         checkTool() — the single entry point
 src/core/normalize.mjs     four payload dialects → one shape; patch-body parsing
 src/core/bash.mjs          shell analysis — largest file, most of the difficulty
 src/core/guardrails/       secret · heavy-path · broad-glob
-src/tier-a/guard.mjs       Claude Code + Codex (stdin JSON → exit 0|2)
+src/tier-a/guard.mjs       Claude Code + Codex (mode-aware stdin → output/exit 0|2)
 src/tier-b/shared.mjs      Pi + omp (pi.mjs / omp.mjs are thin re-exports)
 test/tool-shapes.test.mjs  real captured payloads per harness
 test/extraction.test.mjs   regressions found by replaying real history
@@ -198,6 +207,7 @@ Phase 0's remaining work, in order:
 
 Do not start Phase 1 (publishing) until the SCOPE.md exit criteria are met.
 
-Current numbers, for comparison after a change: 203 tests, replay ~1%, red team
-36/39 (the three remaining are deliberate shell evasion, outside the threat
-model of a well-meaning agent).
+Current numbers, for comparison after a change: 225 core tests / 274 assembled,
+replay 34/3,993 in-scope calls (0.85%). A prior red-team run covered 39 vectors;
+three deliberate shell-evasion cases remain outside the threat model of a
+well-meaning agent.
