@@ -69,8 +69,8 @@ the core verdict remains shared:
   `PermissionRequest`.
 - **Pi 0.84.2 and omp 18.1.6:** the shared Tier B tests await an async
   `tool_call` handler, assert one literal-`true` `ctx.ui.confirm()` approval,
-  and assert that decline, timeout, cancellation, rejection, and no UI return
-  `{block:true,reason}` or fail open exactly as specified.
+  and assert that a non-`true` result or no UI keeps the original
+  `{block:true,reason}`. A confirmation exception fails open and is logged.
 - **Codex 0.146.0:** the Tier A tests keep exit 2 plus stderr and empty stdout.
   No `ask` response is emitted because the installed runtime rejects it.
 

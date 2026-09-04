@@ -20,7 +20,8 @@ one-shot approval path at their adapter boundary:
 - Claude Code's interactive/default `PreToolUse` response is
   `permissionDecision:"ask"`.
 - Pi and omp use `await ctx.ui.confirm(...)` only when `ctx.hasUI === true`.
-- A declined, cancelled, timed-out, headless, or Codex call remains blocked.
+- A non-`true` result, headless call, or Codex call remains blocked; a
+  confirmation exception fails open.
 - Persistent exceptions use `guardrails.secret.allow`,
   `guardrails.heavyPath.allow`, or `enabled:false` on the guardrail that fires.
 

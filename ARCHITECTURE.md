@@ -83,10 +83,11 @@ responses that also supply `updatedInput`, and its installed runtime rejects
 | **Block** | **`exit 2`, reason on stderr** | Codex; Claude `dontAsk`/`bypassPermissions` |
 | **Request approval** | `exit 0` plus `PreToolUse` `permissionDecision: "ask"` JSON | Claude interactive/default |
 | Inject context | `hookSpecificOutput.additionalContext` | Claude Code, Codex |
-| **Block** | **`{block:true, reason}`** after decline, timeout, cancellation, or no UI | Pi, omp |
+| **Block** | **`{block:true, reason}`** after a non-`true` confirmation result or no UI | Pi, omp |
 
 Pi and omp await `ctx.ui.confirm()` only when `ctx.hasUI === true`; a literal
-`true` allows that exact call once. A confirmation exception fails open. The
+`true` allows that exact call once. A non-`true` result keeps the original block,
+while a confirmation exception fails open. The
 documented Claude `PermissionRequest` event exists, but this implementation does
 not register it.
 ---

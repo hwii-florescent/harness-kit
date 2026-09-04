@@ -52,8 +52,9 @@ Adapters translate that verdict:
 - Codex stays on exit 2 + stderr; its installed runtime rejects
   `permissionDecision: "ask"`.
 - Pi and omp await one `ctx.ui.confirm()` only when `ctx.hasUI === true`.
-  Approval allows that exact call once; decline, timeout, cancellation, or no UI
-  returns `{block:true, reason}`. No approval persists.
+  Approval allows that exact call once; a non-`true` result or no UI returns
+  `{block:true, reason}`. A confirmation exception fails open. No approval
+  persists.
 
 Claude's separate `PermissionRequest` event is documented but unused; the kit
 uses the `PreToolUse` `ask` response instead. Registration and structural
