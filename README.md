@@ -10,7 +10,7 @@ have already cost time. Then [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
-npm test              # 274 tests, no dependencies
+npm test              # 225 core tests; 274 on the assembled stack
 npm run replay        # false-positive rate against real agent history
 npm run doctor        # which harnesses are installed / wired
 ```
@@ -71,7 +71,7 @@ src/core/            checkTool, config, normalisation, bash analysis
   guardrails/        secret · heavy-path · broad-glob
 src/tier-a/guard.mjs Claude Code + Codex
 src/tier-b/          shared.mjs + pi.mjs + omp.mjs
-test/                274 tests; payloads.mjs holds the four dialects
+test/                225 core tests; 274 on the assembled stack
 scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
 ```
 
