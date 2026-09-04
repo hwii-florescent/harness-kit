@@ -16,6 +16,21 @@
 set -euo pipefail
 
 KIT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The exact path substring that marks a hook entry as this kit's own — must
+# match dev-link.sh's $GUARD_PATH exactly. A plain "contains $KIT" test is a
+# path-prefix false positive across sibling worktrees (e.g. ../bristleworm and
+# ../bristleworm-2, one a strict prefix of the other): from the shorter path,
+# the longer worktree's entry would read as "already wired" and never install;
+# from the longer path, unlink would delete the shorter worktree's entry too.
+GUARD_PATH="$KIT/src/tier-a/guard.mjs"
+
+# Print the header comment (everything between the shebang and the first
+# blank/code line) as --help text. Range-independent so a header that grows
+# or shrinks never silently truncates the output the way a hardcoded
+# `sed -n 'N,Mp'` line range did.
+print_help() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$1"
+}
 
 APPLY=0
 ONLY=""
@@ -25,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     --apply) APPLY=1 ;;
     --only)  ONLY="${2:-}"; shift ;;
     --only=*) ONLY="${1#*=}" ;;
-    -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) print_help "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
   shift
@@ -55,15 +70,47 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 backup() {
   local f="$1" b
-  b="$f.harness-kit-bak.$(date +%Y%m%d%H%M%S)"
+  # mktemp both picks a name unique enough to survive a link+unlink within the
+  # same second (plain second-granularity timestamps collide, and `cp -p`
+  # with no `-n` would then silently overwrite the earlier backup) and creates
+  # it atomically, so there is no race between choosing the name and using it.
+  b="$(mktemp "$f.harness-kit-bak.$(date +%Y%m%d%H%M%S).XXXXXX")"
   cp -p "$f" "$b"
   say "$DIM  backup: $b$RST"
 }
 
+# The shared "does this entry belong to this kit" predicate, used both to gate
+# unwire_tier_a (fix parity with the removal filter below — the gate used to
+# be a bare `grep -qF "$KIT"`, which could disagree with the filter, e.g. when
+# $KIT text appears outside a hook command such as in
+# permissions.additionalDirectories: every run would then report a change,
+# take a backup, and rewrite the file removing nothing) and to select entries
+# to drop in the removal filter itself.
+#
+# Every shape is type-guarded before `contains()`: a neighbouring entry that
+# is a bare string/number, a non-string `command`, a `hooks` item that is a
+# string, or a non-array event value must read as "doesn't match" rather than
+# make jq itself error — jq -e degrades any such error to exit 5, which reads
+# as "not wired" wherever the caller only checks the if-condition, and inside
+# the with_entries sweep below it would abort removal for every event, not
+# just the malformed one.
+read -r -d '' KIT_ENTRY_PREDICATE <<'JQ' || true
+[ .command?, ((.hooks? // []) | .[]? | .command?) ]
+  | map(select(type == "string") | contains($guard)) | any
+JQ
+
 # ── Tier A ──────────────────────────────────────────────────────────────────
 #
-# Filter the PreToolUse array rather than resetting it: by now the user may have
-# added hooks of their own, and those must survive an uninstall.
+# Filter each hook-event array rather than resetting it: by now the user may
+# have added hooks of their own, and those must survive an uninstall.
+#
+# dev-link.sh wires this kit under whichever hook event a given feature needs
+# (PreToolUse today; a later stage adds more, e.g. UserPromptSubmit) — see the
+# per-event idempotence note in dev-link.sh. Unlink must remove this kit's
+# entry from every event it might be under, not just PreToolUse, or a later
+# event would survive an uninstall silently. Rather than hardcode the event
+# names here (and having to revisit this file each time dev-link.sh gains one),
+# walk every key under `.hooks` and filter each one the same way.
 
 unwire_tier_a() {
   local key="$1" name="$2" file="$3"
@@ -72,11 +119,6 @@ unwire_tier_a() {
 
   if [[ ! -f "$file" ]]; then
     skip "$name — $file absent"
-    return 0
-  fi
-
-  if ! grep -qF "$KIT" "$file" 2>/dev/null; then
-    skip "$name — not wired"
     return 0
   fi
 
@@ -92,7 +134,20 @@ unwire_tier_a() {
     return 0
   fi
 
-  plan "$name — remove harness-kit PreToolUse entry from $file"
+  # Same predicate as the removal filter below, not a bare `grep -qF "$KIT"`:
+  # a mismatched gate would report a change, take a backup, and rewrite the
+  # file (reformatting it to jq's style) while removing nothing, whenever
+  # $KIT text appears somewhere the filter doesn't look (e.g. inside
+  # permissions.additionalDirectories).
+  if ! jq -e --arg guard "$GUARD_PATH" '
+        [ (.hooks // {}) | to_entries[] | .value | (if type == "array" then .[] else empty end) ]
+        | any('"$KIT_ENTRY_PREDICATE"')
+      ' "$file" >/dev/null 2>&1; then
+    skip "$name — not wired"
+    return 0
+  fi
+
+  plan "$name — remove harness-kit hook entries from $file"
   CHANGED=1
   [[ $APPLY -eq 1 ]] || return 0
 
@@ -101,12 +156,19 @@ unwire_tier_a() {
   local tmp
   tmp="$(mktemp)"
   # Drop an entry when any command it carries names this checkout. Commands are
-  # read from both shapes: nested under .hooks, and bare on the entry.
-  if jq --arg kit "$KIT" '
-        .hooks.PreToolUse = ((.hooks.PreToolUse // []) | map(select(
-          ([ .command // empty, (.hooks[]?.command // empty) ]
-             | map(contains($kit)) | any) | not
-        )))
+  # read from both shapes: nested under .hooks, and bare on the entry. Applied
+  # to every array under .hooks (PreToolUse, UserPromptSubmit, …) so a new hook
+  # event dev-link.sh starts wiring is covered here with no further edit. Only
+  # touches `.hooks` when the key already exists — a file with none must not
+  # gain an empty "hooks": {} from an uninstall that had nothing to remove.
+  if jq --arg guard "$GUARD_PATH" '
+        if has("hooks") then
+          .hooks |= with_entries(
+            .value |= (if type == "array" then map(select(
+              ('"$KIT_ENTRY_PREDICATE"') | not
+            )) else . end)
+          )
+        else . end
       ' "$file" > "$tmp"; then
     mv "$tmp" "$file"
   else
