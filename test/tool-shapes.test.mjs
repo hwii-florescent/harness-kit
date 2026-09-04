@@ -115,10 +115,31 @@ describe('the rest of the omp tool surface', () => {
   });
 
   test('read paths with harness selector suffixes are normalized', () => {
-    blocked({ toolName: 'read', input: { path: '.env:raw' } }, 'reading .env with :raw selector');
-    blocked({ toolName: 'read', input: { path: '.env:1-50' } }, 'reading .env with line selector');
-    blocked({ toolName: 'read', input: { path: 'node_modules:raw' } }, 'reading heavy root with selector');
-    allowed({ toolName: 'read', input: { path: 'node_modules/pkg/index.js:raw:1-10' } }, 'targeted file in heavy path with selector');
-    allowed({ toolName: 'read', input: { path: 'src/index.ts:50-100' } }, 'reading source file with line selector');
+    const selectors = [
+      ':raw',
+      ':1-50',
+      ':raw:1-10,20-30',
+      ':50-',
+      ':raw:-60',
+      ':5-16,960-973',
+      ':2-4:raw',
+      ':raw:2-4:raw',
+    ];
+    for (const selector of selectors) {
+      const payload = { toolName: 'read', input: { path: `.env${selector}` } };
+      assert.deepEqual(normalize(payload).paths, ['.env'], selector);
+      blocked(payload, `reading .env with ${selector} selector`);
+    }
+
+    const targeted = {
+      toolName: 'read',
+      input: { path: 'node_modules/pkg/index.js:raw:1-10,20-30' },
+    };
+    assert.deepEqual(normalize(targeted).paths, ['node_modules/pkg/index.js']);
+    allowed(targeted, 'targeted file in heavy path with a compound selector');
+    allowed(
+      { toolName: 'read', input: { path: 'src/index.ts:50-100' } },
+      'reading source file with line selector',
+    );
   });
 });

@@ -43,10 +43,15 @@ const first = (...vals) => vals.find((v) => v !== undefined && v !== null && v !
  * Strip harness-specific line/selector suffixes from structured tool paths,
  * e.g. omp's `path: ".env:raw"` or `file: "src/app.ts:50-100"`.
  */
+const LINE_RANGE = String.raw`(?:\d+(?:-\d*)?|\d+\+\d+|-\d+)`;
+const LINE_RANGES = `${LINE_RANGE}(?:,${LINE_RANGE})*`;
+const SELECTOR_SUFFIX = new RegExp(
+  String.raw`:(?:raw(?::${LINE_RANGES})?(?::raw)?|${LINE_RANGES}(?::raw)?|conflicts|img)$`,
+);
+
 function stripSelector(p) {
   if (typeof p !== 'string' || !p) return p;
-  // Suffix starts with `:` followed by line ranges, selectors (raw, conflicts, img), or internal flags.
-  return p.replace(/:(?:\d+(?:-\d+|\+\d+)?|raw(?::\d+(?:-\d+)?)?|conflicts|img|\/?-[0-9]+|\d+-\d+(?:,\d+-\d+)*)(?::raw)?$/, '');
+  return p.replace(SELECTOR_SUFFIX, '');
 }
 
 /** Fields that carry a single filesystem path across the four harnesses. */
