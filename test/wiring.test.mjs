@@ -62,21 +62,25 @@ function runDoctor(sandbox) {
     env: envFor(sandbox),
   });
 }
-function setOmpListing(sandbox, listing) {
+function setOmpOutput(sandbox, output) {
   const listingFile = path.join(sandbox.root, 'omp-list.json');
-  writeJson(listingFile, listing);
+  fs.writeFileSync(listingFile, output);
   const quoted = listingFile.replaceAll("'", "'\"'\"'");
   const file = path.join(sandbox.bin, 'omp');
   fs.writeFileSync(file, `#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf '%s\n' 'fake omp'
-elif [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+elif [ "$1" = "plugin" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
   cat '${quoted}'
 else
   printf '%s\n' 'fake omp'
 fi
 `);
   fs.chmodSync(file, 0o755);
+}
+
+function setOmpListing(sandbox, listing) {
+  setOmpOutput(sandbox, JSON.stringify(listing));
 }
 
 function ompStatusLine(result) {
@@ -321,15 +325,37 @@ describe('doctor OMP registration detection', () => {
     assert.match(ompStatusLine(result).replace(ANSI, ''), /wired$/);
   });
 
+  const missingEnabled = valid();
+  delete missingEnabled.enabled;
   for (const [label, entry] of [
     ['a package-name prefix lookalike', valid({ name: 'other-harness-kit' })],
     ['a different checkout path', valid({ path: '/tmp' })],
     ['a missing omp entry point', valid({ manifest: { extensions: ['./src/tier-b/pi.mjs'] } })],
+    ['a missing enabled flag', missingEnabled],
+    ['a null enabled flag', valid({ enabled: null })],
+    ['a string enabled flag', valid({ enabled: 'true' })],
+    ['a numeric enabled flag', valid({ enabled: 1 })],
     ['a disabled registration', valid({ enabled: false })],
   ]) {
     test(`rejects ${label}`, (t) => {
       const sandbox = makeSandbox(t, `harness-kit-doctor-omp-${label.replaceAll(' ', '-')}`);
       setOmpListing(sandbox, { npm: [entry] });
+      const result = runDoctor(sandbox);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(ompStatusLine(result).replace(ANSI, ''), /not wired$/);
+    });
+  }
+
+  for (const [label, output] of [
+    ['malformed JSON', '{ not json'],
+    ['array root', JSON.stringify([])],
+    ['non-array npm field', JSON.stringify({ npm: {} })],
+    ['malformed plugin entry', JSON.stringify({ npm: [null] })],
+    ['malformed plugin manifest', JSON.stringify({ npm: [valid({ manifest: null })] })],
+  ]) {
+    test(`rejects ${label}`, (t) => {
+      const sandbox = makeSandbox(t, `harness-kit-doctor-omp-${label.replaceAll(' ', '-')}`);
+      setOmpOutput(sandbox, output);
       const result = runDoctor(sandbox);
       assert.equal(result.status, 0, result.stderr);
       assert.match(ompStatusLine(result).replace(ANSI, ''), /not wired$/);

@@ -93,7 +93,7 @@ function ompRegistered() {
     return plugins.some((plugin) => {
       if (!plugin || typeof plugin !== 'object'
         || plugin.name !== PACKAGE_NAME
-        || plugin.enabled === false
+        || plugin.enabled !== true
         || typeof plugin.path !== 'string'
         || !Array.isArray(plugin.manifest?.extensions)
         || !plugin.manifest.extensions.includes(OMP_EXTENSION)) {
