@@ -5,8 +5,8 @@
  * Pi-authored extensions through a compatibility shim. Kept as a separate file
  * so that any future divergence has an obvious home.
  *
- * Phase 0 wiring: symlink into `~/.omp/agent/extensions/harness-kit.mjs`, or
- * load ad hoc with `omp -e <repo>/src/tier-b/omp.mjs`.
+ * Phase 0 wiring: `omp install <repo>` (or `omp plugin install <repo>`) registers
+ * the package; load ad hoc with `omp -e <repo>/src/tier-b/omp.mjs`.
  */
 
 import { install } from './shared.mjs';
