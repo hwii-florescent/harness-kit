@@ -100,9 +100,17 @@ export function check(call, config) {
     if (rule) return verdict(p, rule);
   }
 
-  // A glob can name a secret file just as effectively as a path can. A grep
-  // pattern cannot: searching for the string ".env" does not open it.
-  if (call.pattern && call.kind !== KIND.GREP) {
+  // A glob can name a secret file just as effectively as a path can — and for
+  // a GREP call, normalize.mjs now carries the *regex* separately as
+  // call.searchRegex and puts the file filter (Claude Code/Pi/omp's `glob`)
+  // here as call.pattern (defect #5), so `Grep{pattern:"KEY", glob:".env*"}`
+  // reaches a real credential exactly like `Glob{pattern:".env*"}` does. This
+  // check no longer excludes KIND.GREP: that exclusion was written when
+  // `call.pattern` on a GREP still held the search term, and became a stale
+  // credential hole once normalize.mjs was fixed to route the file filter
+  // here instead. The regex itself never lands in `call.pattern`, so
+  // searching *for* the string ".env" still isn't treated as opening it.
+  if (call.pattern) {
     const rule = ruleFor(call.pattern, allow);
     if (rule) return verdict(call.pattern, rule);
   }

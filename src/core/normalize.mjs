@@ -91,17 +91,60 @@ function patchPaths(input) {
  * @param {object} [extra]  Fallbacks, e.g. `{ cwd }` from a Tier B context.
  * @returns {{
  *   kind: string, rawTool: string, event: string|null,
- *   command: string|null, pattern: string|null, searchPath: string|null,
+ *   command: string|null, pattern: string|null, searchRegex: string|null,
+ *   searchPath: string|null, boundedRead: boolean,
  *   paths: string[], cwd: string, input: object
  * }}
  */
 export function normalize(payload = {}, extra = {}) {
   const rawTool = String(first(payload.tool_name, payload.toolName, payload.tool, '') ?? '');
   const input = first(payload.tool_input, payload.toolInput, payload.input, payload.args) ?? {};
-  const kind = TOOL_KINDS.get(rawTool.toLowerCase()) ?? KIND.OTHER;
+
+  // str_replace_editor's `command` field selects among
+  // view | create | str_replace | insert | undo_edit — only `view` is a read
+  // (of a file, or of a whole directory if `path` names one); the other four
+  // are genuine writes. The tool is *named* an editor, but a `view` call's
+  // *role* is a read — the same spelling-vs-role distinction the rest of
+  // normalize.mjs draws for a Grep's `pattern` (defect #5). Misclassifying it
+  // as KIND.EDIT let heavy-path's WRITE/EDIT early return (defect #6) past an
+  // unbounded directory read it should still catch. No wired harness in
+  // ARCHITECTURE.md's observed-shapes table has been captured sending this
+  // tool, so the hole is unverified live, but it is real in code as written:
+  // `str_replace_editor` is Anthropic's documented text-editor tool shape.
+  const kind = rawTool.toLowerCase() === 'str_replace_editor' && input.command === 'view'
+    ? KIND.READ
+    : TOOL_KINDS.get(rawTool.toLowerCase()) ?? KIND.OTHER;
 
   const command = first(input.command, input.cmd, input.script) ?? null;
-  const pattern = first(input.pattern, input.glob, input.globPattern) ?? null;
+
+  // A grep tool's `pattern` is a regex, never a glob or a path — treating it
+  // as one is defect #5 (ARCHITECTURE.md §7). It is uniform across all four
+  // harnesses (Claude Code, Pi and omp all send `{pattern, glob}`; Codex has
+  // no native grep) so no branching is needed: for KIND.GREP, `pattern` on
+  // the normalised call comes from `input.glob` — the file-name filter —
+  // only, and the regex is carried separately as `searchRegex` so no
+  // guardrail can mistake a search term for something that names a file.
+  const searchRegex = kind === KIND.GREP ? (first(input.pattern) ?? null) : null;
+  const pattern = kind === KIND.GREP
+    ? (first(input.glob, input.globPattern) ?? null)
+    : (first(input.pattern, input.glob, input.globPattern) ?? null);
+
+  // Claude Code's Read takes a `limit`, which makes it bounded by
+  // construction — the structured-tool equivalent of `sed -n '30,60p'` in
+  // bash.mjs's `isBoundedRead`. But "the field is present" is not "the read
+  // is bounded": `limit: false`, `limit: {}` and `limit: -1` are not bounds
+  // in any sense, and `limit: 999999` is a bound in name only. `offset` alone
+  // (no `limit`) reads to EOF, so it no longer counts by itself — assuming a
+  // harness applies some default page size on top of a bare offset would bake
+  // an assumption about harness internals into src/core/, which invariant #1
+  // and traps #3/#5 exist to forbid. 1000 is an arbitrary but generous
+  // ceiling: comfortably above every real Read call seen in replay (the
+  // largest is `limit: 40`) and far below the abuse shapes this guardrail
+  // exists to catch (999999). An unbounded read of the same path is still in
+  // scope; only the volume judgement changes.
+  const limit = input.limit;
+  const boundedRead = kind === KIND.READ
+    && typeof limit === 'number' && Number.isFinite(limit) && limit > 0 && limit <= 1000;
 
   // For discovery tools `path` is the directory being searched, not a target
   // file — broad-glob needs it separately to judge how wide the search is, and
@@ -138,7 +181,9 @@ export function normalize(payload = {}, extra = {}) {
     event: first(payload.hook_event_name, payload.hookEventName, payload.event) ?? null,
     command,
     pattern: globPattern,
+    searchRegex,
     searchPath,
+    boundedRead,
     paths,
     cwd: first(payload.cwd, extra.cwd, process.cwd()),
     input,

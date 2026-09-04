@@ -51,7 +51,17 @@ function isWideSearchPath(searchPath, cwd) {
 export function check(call, config) {
   const { enabled = true } = config?.guardrails?.broadGlob ?? {};
   if (!enabled) return null;
-  if (call.kind !== KIND.GLOB && call.kind !== KIND.GREP) return null;
+  // This guardrail's axis is breadth of *enumeration*: how many names does
+  // the call list out, regardless of which directories they live in. A
+  // content search is bounded by its matches instead — Claude Code's Grep
+  // even has `head_limit` — so `**/*.ts` at the root really does return every
+  // file when it's a Glob, but the same pattern as a GREP file filter
+  // (`call.pattern` on a GREP call — normalize.mjs, defect #5) doesn't
+  // enumerate names into context the way Glob does, and stays out of scope
+  // here. heavy-path.mjs polices a different axis on that same GREP call —
+  // which tree the search reaches into, not how many results come back — see
+  // the comment there; the two guardrails are orthogonal, not contradictory.
+  if (call.kind !== KIND.GLOB) return null;
 
   const pattern = typeof call.pattern === 'string' ? call.pattern.trim() : '';
   if (!pattern || !BROAD.some((re) => re.test(pattern))) return null;

@@ -53,9 +53,21 @@ export function check(call, config) {
   const { enabled = true, patterns = [], allow = [] } = cfg;
   if (!enabled || patterns.length === 0) return null;
 
+  // Context economy, not access control (AGENTS.md invariant 5). Writing or
+  // editing a file under dist/build/etc. costs no context — it is `rm -rf
+  // dist` or `mkdir dist` under a different tool name, both of which are
+  // already exempt on the shell path. Only reading floods the transcript.
+  if (call.kind === KIND.WRITE || call.kind === KIND.EDIT) return null;
+
   for (const p of call.paths) {
     const rule = ruleFor(p, patterns, allow);
-    if (rule) return verdict(p, rule);
+    if (!rule) continue;
+    // `Read{limit,offset}` is bounded by construction, same as `sed -n` on the
+    // shell path — the concern is volume, not access, so a windowed read is
+    // fine even into node_modules. An unbounded read of the same path stays
+    // blocked.
+    if (call.boundedRead) continue;
+    return verdict(p, rule);
   }
 
   if (call.searchPath) {
@@ -63,10 +75,17 @@ export function check(call, config) {
     if (rule) return verdict(call.searchPath, rule);
   }
 
-  // A GREP pattern is a search expression, not a path. Searching *for* the text
-  // "build" or ".env" reads neither — the paths are `searchPath` and `paths`.
-  // A GLOB pattern does name files, so it stays in scope.
-  if (call.pattern && call.kind !== KIND.GREP) {
+  // `call.pattern` never holds a grep regex — normalize.mjs carries that
+  // separately as `searchRegex` (defect #5). What's left here is a GLOB
+  // pattern or a GREP file filter, and either one names which tree the call
+  // reaches into. That's this guardrail's axis — a generated/vendored
+  // directory, regardless of how many results come back — not breadth of
+  // enumeration, which is broad-glob.mjs's job. A GREP bounded by match count
+  // can still be searching inside `dist/**`, and even one match pulled out of
+  // a minified bundle line can flood the transcript on its own, so this stays
+  // in scope for GREP even though broadGlob (content search is bounded by its
+  // matches, not by how many files it walks) waves the same call through.
+  if (call.pattern) {
     const rule = ruleFor(call.pattern, patterns, allow);
     if (rule) return verdict(call.pattern, rule);
   }
