@@ -55,6 +55,11 @@ Adapters translate that verdict:
   Approval allows that exact call once; decline, timeout, cancellation, or no UI
   returns `{block:true, reason}`. No approval persists.
 
+Claude's separate `PermissionRequest` event is documented but unused; the kit
+uses the `PreToolUse` `ask` response instead. Registration and structural
+inspection are not proof that an extension loaded, so use the live block/pass
+smoke for that claim.
+
 Allowed process calls remain exit 0 with no output. Context injection still uses
 the shared JSON `additionalContext` shape.
 
@@ -80,9 +85,9 @@ asserting on the process contract. Tier B is tested through an async fake
 `ExtensionAPI` shaped like Pi's, including approval, denial, no-UI, and
 fail-open confirmation cases.
 
-A dedicated `false positives` suite guards the Phase 0 exit criterion of a zero
-false-positive rate — `git commit -m "fix .env loading"`, `rm -rf dist`,
-`./node_modules/.bin/eslint src` and friends must all pass through.
+A dedicated false-positive suite protects the Phase 0 replay target:
+`git commit -m "fix .env loading"`, `rm -rf dist`, `./node_modules/.bin/eslint
+src` and friends must all pass through.
 
 ### Replay: the test that unit tests cannot be
 
@@ -111,7 +116,7 @@ come back.
 A guardrail can only judge a call it understands. A tool whose payload shape the
 normaliser does not recognise is not a safe default — it is a silent hole: the
 call becomes `KIND.OTHER` with no paths, every guardrail sees nothing, and it
-passes while `doctor` still says "wired".
+passes while a registration check can still say "wired".
 
 omp is the demanding case. It has far more tools than pi and edits with
 **hashline**, which sends the whole patch as one `input` string with the target

@@ -99,8 +99,13 @@ manifest entry points or `-e` for ad-hoc runs.
 | 4 | Guardrail modularity — removing one breaks a bounded, obvious set of tests | ⚠️ reworded; `secret` now spans three test files by design (unit, extraction, tool-shapes) |
 | 5 | Corrupting `core/index.mjs` fails open everywhere | ✅ 31 hostile payloads, 9 failure drills |
 | 6 | Editing a core file changes behaviour on all four with no re-link | ✅ |
-| 7 | `doctor` reports all four wired, with versions | ✅ |
+| 7 | `doctor` reports structural wiring/registration and versions; live loading is checked separately | ✅ |
 
+
+`doctor` is deliberately not a claim that a Tier B extension handler loaded:
+package-manager registration is necessary but the live block/pass smoke is the
+execution proof. Codex's live block remains the only open technical acceptance
+item.
 Criterion 1 is the one open technical item: **Codex has never been exercised
 live.** Its payloads here have only ever been synthetic. Close this before
 treating the dogfood as covering all four.

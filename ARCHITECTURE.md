@@ -33,7 +33,7 @@ observing what it actually does.
 |---|---|---|---|---|
 | Interception model | process hook | process hook | in-process ESM | in-process ESM |
 | Hook config | `~/.claude/settings.json` → `hooks` | `~/.codex/hooks.json` | — (extensions) | — (extensions) |
-| Can block a tool call | ✅ verified | ✅ | ✅ verified | ✅ verified |
+| Can block a tool call | ✅ verified | ⚠️ exit-2 contract; live unverified | ✅ verified | ✅ verified |
 | Extension registration | — | — | `pi install <path>` | `omp install <path>` |
 | Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | `package.json` `pi` key | `package.json` `omp` key |
 | Marketplace manifest | `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` | — (npm/git direct) | — (npm/git direct) |
@@ -57,7 +57,7 @@ Claude Code and Codex expose a near-identical event set.
 | `PreCompact` | ✅ | ✅ |
 | `PostCompact` | — | ✅ |
 | `Stop` | ✅ | ✅ |
-| `PermissionRequest` | ✅ documented | ✅ |
+| `PermissionRequest` | ✅ documented (not used) | ✅ documented (not used) |
 
 Pi/omp equivalents (event-bus names): `tool_call` (≈ PreToolUse, can block),
 `tool_result` (≈ PostToolUse), `before_agent_start` (≈ UserPromptSubmit),
@@ -335,7 +335,9 @@ Uninstall filters the array by command path so hooks added later survive.
 
 Because Tier B registration links the checkout rather than copying it, and Tier A
 re-execs the shim per tool call, an edit to `core/` is live everywhere with no
-re-link — at most a `/reload` for a long-lived Tier B extension.
+re-link — at most a `/reload` for a long-lived Tier B extension. Registration is
+not proof that a Tier B extension loaded; the live block/pass smoke is the
+execution check.
 
 ### 8.1 Phase 1 — published (other people)
 

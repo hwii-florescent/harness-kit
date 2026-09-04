@@ -110,8 +110,9 @@ entry points. Prefer install anyway: it registers in settings, supports
 `/reload` and enable/disable, and gives `doctor` something authoritative to ask.
 
 The `doctor` half of this trap stands: the old one looked for the symlink it had
-just created and reported "wired" while nothing had loaded. It now asks
-`pi list` / `omp plugin list`.
+just created and reported "wired" while nothing had loaded. It now checks the
+canonical Tier A command and asks `pi list` / `omp plugin list` for Tier B
+registration. A live block/pass smoke is still the proof that a handler loaded.
 
 **2. Naming the guardrails in injected context causes silent refusals.**
 `context.mjs` once said *"Guardrails active: secret, heavyPath, broadGlob"*.
