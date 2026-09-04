@@ -117,13 +117,26 @@ describe('the rest of the omp tool surface', () => {
   test('read paths with harness selector suffixes are normalized', () => {
     const selectors = [
       ':raw',
+      ':RAW',
       ':1-50',
+      ':L1-L50',
+      ':1+50',
+      ':L1+L50',
       ':raw:1-10,20-30',
+      ':RAW:L1..L10',
       ':50-',
+      ':50..',
       ':raw:-60',
+      ':-60:raw',
       ':5-16,960-973',
+      ':L5-L16,960..L973',
       ':2-4:raw',
+      ':L2..L4:RAW',
       ':raw:2-4:raw',
+      ':conflicts',
+      ':CONFLICTS',
+      ':img',
+      ':IMG',
     ];
     for (const selector of selectors) {
       const payload = { toolName: 'read', input: { path: `.env${selector}` } };
@@ -133,7 +146,7 @@ describe('the rest of the omp tool surface', () => {
 
     const targeted = {
       toolName: 'read',
-      input: { path: 'node_modules/pkg/index.js:raw:1-10,20-30' },
+      input: { path: 'node_modules/pkg/index.js:RAW:L1..L10' },
     };
     assert.deepEqual(normalize(targeted).paths, ['node_modules/pkg/index.js']);
     allowed(targeted, 'targeted file in heavy path with a compound selector');

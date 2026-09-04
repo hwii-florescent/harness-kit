@@ -42,11 +42,17 @@ const first = (...vals) => vals.find((v) => v !== undefined && v !== null && v !
 /**
  * Strip harness-specific line/selector suffixes from structured tool paths,
  * e.g. omp's `path: ".env:raw"` or `file: "src/app.ts:50-100"`.
+ *
+ * The selector grammar is case-insensitive and supports the forms accepted by
+ * omp's structured read tool: optional `L` line prefixes, `-`, `+`, and `..`
+ * ranges, open-ended ranges, comma-separated ranges, negative-tail selectors,
+ * and `raw` combined with one range component.
  */
-const LINE_RANGE = String.raw`(?:\d+(?:-\d*)?|\d+\+\d+|-\d+)`;
+const LINE_RANGE = String.raw`L?\d+(?:(?:[-+]|\.\.)L?\d+|-|\.\.)?`;
 const LINE_RANGES = `${LINE_RANGE}(?:,${LINE_RANGE})*`;
 const SELECTOR_SUFFIX = new RegExp(
-  String.raw`:(?:raw(?::${LINE_RANGES})?(?::raw)?|${LINE_RANGES}(?::raw)?|conflicts|img)$`,
+  String.raw`:(?:raw(?::(?:${LINE_RANGES}|-\d+))?(?::raw)?|(?:${LINE_RANGES}|-\d+)(?::raw)?|conflicts|img)$`,
+  'i',
 );
 
 function stripSelector(p) {
