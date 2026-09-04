@@ -69,8 +69,9 @@ that is a bug worth fixing, not working around.
 3. **Adapter translations are explicit.** Claude's interactive/default
    `PreToolUse` block returns `permissionDecision:"ask"`; Claude
    `dontAsk`/`bypassPermissions` and Codex return exit 2 + stderr; Pi and omp
-   return `{block:true,reason}` after a declined, unavailable, or timed-out
-   prompt. Never send `permissionDecision:"ask"` to Codex.
+   return `{block:true,reason}` after a non-`true` result or without UI, while
+   confirmation exceptions fail open. Never send `permissionDecision:"ask"` to
+   Codex.
 4. **Everything fails open.** Any internal error allows the call and appends to
    `<kit>/.local/crash.jsonl`.
 5. **`secret` and `heavyPath` use different extraction on purpose.** Do not
