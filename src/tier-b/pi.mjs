@@ -1,8 +1,8 @@
 /**
  * Pi extension entry point.
  *
- * Phase 0 wiring: symlink into `~/.pi/agent/extensions/harness-kit.mjs`, or load
- * ad hoc with `pi -e <repo>/src/tier-b/pi.mjs`.
+ * Phase 0 wiring: `pi install <repo>` registers the package; load ad hoc with
+ * `pi -e <repo>/src/tier-b/pi.mjs` when testing without changing registration.
  */
 
 import { install } from './shared.mjs';
