@@ -53,11 +53,62 @@ function merge(base, patch) {
   return out;
 }
 
+const isObject = (value) => value !== null
+  && typeof value === 'object'
+  && !Array.isArray(value);
+
+const isStringArray = (value) => Array.isArray(value)
+  && value.every((entry) => typeof entry === 'string');
+
+/**
+ * Keep only typed guardrail options. Invalid config must not replace defaults
+ * or trigger a fail-open exception inside a guardrail.
+ */
+function sanitizeGuardrail(name, value) {
+  if (!isObject(value)) return null;
+
+  const out = {};
+  for (const [key, option] of Object.entries(value)) {
+    if (key === 'enabled') {
+      if (typeof option === 'boolean') out[key] = option;
+      continue;
+    }
+    if ((key === 'allow' || (name === 'heavyPath' && key === 'patterns'))
+      && !isStringArray(option)) {
+      continue;
+    }
+    out[key] = option;
+  }
+  return out;
+}
+
+function sanitizeConfig(value) {
+  if (!isObject(value)) return null;
+
+  const out = { ...value };
+  if (!Object.hasOwn(value, 'guardrails')) return out;
+  if (!isObject(value.guardrails)) {
+    delete out.guardrails;
+    return out;
+  }
+
+  const guardrails = { ...value.guardrails };
+  for (const name of ['secret', 'heavyPath', 'broadGlob']) {
+    if (!Object.hasOwn(guardrails, name)) continue;
+    const sanitized = sanitizeGuardrail(name, guardrails[name]);
+    if (sanitized === null) delete guardrails[name];
+    else guardrails[name] = sanitized;
+  }
+  out.guardrails = guardrails;
+  return out;
+}
+
 function readJson(file) {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    return sanitizeConfig(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch {
-    // Missing or malformed config is not fatal — defaults still protect the user.
+    // Missing, malformed, or wrongly shaped config is not fatal — defaults
+    // still protect the user.
     return null;
   }
 }
@@ -76,6 +127,7 @@ export function loadConfig({ cwd = process.cwd(), includeGlobal, overrides } = {
   config = merge(config, readJson(path.join(cwd, '.harness-kit.json')));
   config = merge(config, readJson(path.join(cwd, '.harness-kit.local.json')));
 
-  return overrides ? merge(config, overrides) : config;
+  const sanitizedOverrides = sanitizeConfig(overrides);
+  return sanitizedOverrides ? merge(config, sanitizedOverrides) : config;
 }
 

@@ -28,6 +28,14 @@ function secretRead(cwd) {
     tool_input: { file_path: '.env' },
   });
 }
+function heavyDirectoryRead(cwd) {
+  return checkTool({
+    hook_event_name: 'PreToolUse',
+    cwd,
+    tool_name: 'Bash',
+    tool_input: { command: 'ls node_modules' },
+  });
+}
 
 function tempDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
@@ -57,6 +65,38 @@ describe('live layered configuration', () => {
 
     fs.unlinkSync(configFile);
     assert.equal(secretRead(cwd).blocked, true, 'deleting config must restore defaults');
+  });
+
+  test('wrongly shaped config cannot weaken default guardrails', (t) => {
+    const cwd = tempDir(t, 'harness-kit-config-shapes');
+    const configFile = path.join(cwd, '.harness-kit.json');
+
+    for (const value of [null, false, 0, [], 'text']) {
+      writeJson(configFile, value);
+      assert.equal(secretRead(cwd).blocked, true, `root ${JSON.stringify(value)} must not disable secret`);
+      assert.equal(
+        heavyDirectoryRead(cwd).blocked,
+        true,
+        `root ${JSON.stringify(value)} must not disable heavyPath`,
+      );
+    }
+
+    const malformedOptions = [
+      { guardrails: null },
+      { guardrails: { secret: null } },
+      { guardrails: { secret: { enabled: 0, allow: '*' } } },
+      { guardrails: { heavyPath: null } },
+      { guardrails: { heavyPath: { patterns: 'node_modules', allow: '*' } } },
+    ];
+    for (const value of malformedOptions) {
+      writeJson(configFile, value);
+      assert.equal(secretRead(cwd).blocked, true, `malformed secret config must remain protected: ${JSON.stringify(value)}`);
+      assert.equal(
+        heavyDirectoryRead(cwd).blocked,
+        true,
+        `malformed heavyPath config must remain protected: ${JSON.stringify(value)}`,
+      );
+    }
   });
 
   test('local config still overrides project config after both change', (t) => {
