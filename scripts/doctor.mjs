@@ -14,6 +14,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const KIT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const GUARD_PREFIX = `node "${path.join(KIT, 'src/tier-a/guard.mjs')}"`;
+const PACKAGE_NAME = 'harness-kit';
+const OMP_EXTENSION = './src/tier-b/omp.mjs';
+const REAL_KIT = fs.realpathSync(KIT);
+
+const TIER_A_GUARDS = {
+  claude: `${GUARD_PREFIX} --harness claude`,
+  codex: `${GUARD_PREFIX} --harness codex`,
+};
 const HOME = os.homedir();
 
 const dim = (s) => `\x1b[2m${s}\x1b[0m`;
@@ -28,9 +37,26 @@ function version(bin, args = ['--version']) {
   return (r.stdout || r.stderr || '').trim().split('\n')[0] || 'installed';
 }
 
-function fileMentionsKit(file) {
+function tierAWired(file, expected) {
   try {
-    return fs.readFileSync(file, 'utf8').includes(KIT);
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const groups = parsed?.hooks?.PreToolUse;
+    if (!Array.isArray(groups)) return false;
+
+    const nested = groups.flatMap((group) => (
+      Array.isArray(group?.hooks)
+        ? group.hooks.filter((handler) => typeof handler?.command === 'string'
+          && handler.command.startsWith(GUARD_PREFIX))
+        : []
+    ));
+    const direct = groups.filter((group) => (
+      typeof group?.command === 'string' && group.command.startsWith(GUARD_PREFIX)
+    ));
+
+    return direct.length === 0
+      && nested.length === 1
+      && nested[0].type === 'command'
+      && nested[0].command === expected;
   } catch {
     return false;
   }
@@ -51,20 +77,60 @@ function registeredWith(bin, args, needle) {
   return `${r.stdout || ''}${r.stderr || ''}`.includes(needle);
 }
 
+function ompRegistered() {
+  const r = spawnSync('omp', ['plugin', 'list', '--json'], {
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  if (r.error || r.status !== 0) return false;
+
+  try {
+    const listing = JSON.parse(r.stdout || '');
+    const plugins = [
+      ...(Array.isArray(listing?.npm) ? listing.npm : []),
+      ...(Array.isArray(listing?.marketplace) ? listing.marketplace : []),
+    ];
+    return plugins.some((plugin) => {
+      if (!plugin || typeof plugin !== 'object'
+        || plugin.name !== PACKAGE_NAME
+        || plugin.enabled !== true
+        || typeof plugin.path !== 'string'
+        || !Array.isArray(plugin.manifest?.extensions)
+        || !plugin.manifest.extensions.includes(OMP_EXTENSION)) {
+        return false;
+      }
+      try {
+        return fs.realpathSync(plugin.path) === REAL_KIT;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+
+
 const HARNESSES = [
   {
     name: 'Claude Code',
     tier: 'A',
     bin: 'claude',
-    wired: () => ['settings.json', 'settings.local.json']
-      .some((f) => fileMentionsKit(path.join(HOME, '.claude', f))),
+    wired: () => tierAWired(
+      path.join(HOME, '.claude', 'settings.json'),
+      TIER_A_GUARDS.claude,
+    ),
     wiring: '~/.claude/settings.json → hooks.PreToolUse',
   },
   {
     name: 'Codex',
     tier: 'A',
     bin: 'codex',
-    wired: () => fileMentionsKit(path.join(HOME, '.codex', 'hooks.json')),
+    wired: () => tierAWired(
+      path.join(HOME, '.codex', 'hooks.json'),
+      TIER_A_GUARDS.codex,
+    ),
     wiring: '~/.codex/hooks.json → hooks.PreToolUse',
   },
   {
@@ -78,7 +144,7 @@ const HARNESSES = [
     name: 'omp',
     tier: 'B',
     bin: 'omp',
-    wired: () => registeredWith('omp', ['plugin', 'list'], 'harness-kit'),
+    wired: () => ompRegistered(),
     wiring: 'omp install <kit>',
   },
 ];
