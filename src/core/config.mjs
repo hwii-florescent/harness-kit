@@ -40,7 +40,6 @@ export const DEFAULTS = {
   },
 };
 
-const cache = new Map();
 
 /** Deep-merge plain objects; arrays replace rather than concatenate. */
 function merge(base, patch) {
@@ -71,21 +70,12 @@ function readJson(file) {
  */
 export function loadConfig({ cwd = process.cwd(), includeGlobal, overrides } = {}) {
   const global = includeGlobal ?? !process.env.HK_NO_GLOBAL_CONFIG;
-  const key = `${cwd}::${global}`;
 
-  let config = cache.get(key);
-  if (!config) {
-    config = DEFAULTS;
-    if (global) config = merge(config, readJson(path.join(os.homedir(), '.harness-kit.json')));
-    config = merge(config, readJson(path.join(cwd, '.harness-kit.json')));
-    config = merge(config, readJson(path.join(cwd, '.harness-kit.local.json')));
-    cache.set(key, config);
-  }
+  let config = DEFAULTS;
+  if (global) config = merge(config, readJson(path.join(os.homedir(), '.harness-kit.json')));
+  config = merge(config, readJson(path.join(cwd, '.harness-kit.json')));
+  config = merge(config, readJson(path.join(cwd, '.harness-kit.local.json')));
 
   return overrides ? merge(config, overrides) : config;
 }
 
-/** Test helper — the loader memoises per cwd for long-lived Tier B processes. */
-export function clearConfigCache() {
-  cache.clear();
-}

@@ -113,4 +113,12 @@ describe('the rest of the omp tool surface', () => {
     allowed({ toolName: 'todo', input: { op: 'init', list: [] } }, 'todo');
     allowed({ toolName: 'say', input: { text: 'hello' } }, 'say');
   });
+
+  test('read paths with harness selector suffixes are normalized', () => {
+    blocked({ toolName: 'read', input: { path: '.env:raw' } }, 'reading .env with :raw selector');
+    blocked({ toolName: 'read', input: { path: '.env:1-50' } }, 'reading .env with line selector');
+    blocked({ toolName: 'read', input: { path: 'node_modules:raw' } }, 'reading heavy root with selector');
+    allowed({ toolName: 'read', input: { path: 'node_modules/pkg/index.js:raw:1-10' } }, 'targeted file in heavy path with selector');
+    allowed({ toolName: 'read', input: { path: 'src/index.ts:50-100' } }, 'reading source file with line selector');
+  });
 });

@@ -39,6 +39,16 @@ const TOOL_KINDS = new Map(Object.entries({
 
 const first = (...vals) => vals.find((v) => v !== undefined && v !== null && v !== '');
 
+/**
+ * Strip harness-specific line/selector suffixes from structured tool paths,
+ * e.g. omp's `path: ".env:raw"` or `file: "src/app.ts:50-100"`.
+ */
+function stripSelector(p) {
+  if (typeof p !== 'string' || !p) return p;
+  // Suffix starts with `:` followed by line ranges, selectors (raw, conflicts, img), or internal flags.
+  return p.replace(/:(?:\d+(?:-\d+|\+\d+)?|raw(?::\d+(?:-\d+)?)?|conflicts|img|\/?-[0-9]+|\d+-\d+(?:,\d+-\d+)*)(?::raw)?$/, '');
+}
+
 /** Fields that carry a single filesystem path across the four harnesses. */
 const PATH_FIELDS = [
   'file_path', 'filePath', 'path', 'notebook_path', 'notebookPath',
@@ -47,7 +57,6 @@ const PATH_FIELDS = [
 
 /** On discovery tools these name a directory to search, not a file to touch. */
 const DISCOVERY_DIR_FIELDS = new Set(['path', 'dir', 'directory']);
-
 /**
  * Fields that can carry a whole patch as one string.
  *
@@ -123,15 +132,16 @@ export function normalize(payload = {}, extra = {}) {
     searchPath = wild > 0 ? segs.slice(0, wild).join('/') : null;
   }
 
-  const paths = [];
+  const rawPaths = [];
   for (const field of PATH_FIELDS) {
     if (isDiscovery && DISCOVERY_DIR_FIELDS.has(field)) continue;
-    if (typeof input[field] === 'string' && input[field]) paths.push(input[field]);
+    if (typeof input[field] === 'string' && input[field]) rawPaths.push(input[field]);
   }
-  if (Array.isArray(input.paths)) paths.push(...input.paths.filter((p) => typeof p === 'string'));
-  if (Array.isArray(input.files)) paths.push(...input.files.filter((p) => typeof p === 'string'));
-  if (kind === KIND.EDIT || kind === KIND.WRITE) paths.push(...patchPaths(input));
+  if (Array.isArray(input.paths)) rawPaths.push(...input.paths.filter((p) => typeof p === 'string'));
+  if (Array.isArray(input.files)) rawPaths.push(...input.files.filter((p) => typeof p === 'string'));
+  if (kind === KIND.EDIT || kind === KIND.WRITE) rawPaths.push(...patchPaths(input));
 
+  const paths = rawPaths.map((p) => stripSelector(p));
   return {
     kind,
     rawTool,

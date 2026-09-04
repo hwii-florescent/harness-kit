@@ -10,14 +10,14 @@ have already cost time. Then [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
-npm test              # 188 tests, no dependencies
+npm test              # 252 tests, no dependencies
 npm run replay        # false-positive rate against real agent history
 npm run doctor        # which harnesses are installed / wired
 ```
 
 ## What it does
 
-Three guardrails, enforced identically on Claude Code, Codex, Pi and omp:
+Three guardrails share one core decision on Claude Code, Codex, Pi and omp:
 
 | Guardrail | Blocks | Why |
 |---|---|---|
@@ -25,7 +25,9 @@ Three guardrails, enforced identically on Claude Code, Codex, Pi and omp:
 | `heavyPath` | reads inside `node_modules`, `dist`, `.git`, … | Stops generated files flooding the context window |
 | `broadGlob` | `**/*.ts` at the project root | Same, for discovery tools |
 
-Each guardrail is configurable and individually disablable. All three fail open.
+Each guardrail is configurable and individually disablable. Core failures fail
+open; a correct block can be declined through a supported interactive adapter or
+persistently exempted in configuration.
 
 ## How one core serves four harnesses
 
@@ -37,13 +39,24 @@ The harnesses fall into two integration tiers, so there are two adapters, not fo
                          │
           ┌──────────────┴──────────────┐
    Tier A: process hook          Tier B: in-process extension
-   stdin JSON → exit 0|2         pi.on('tool_call') → {block:true}
+   stdin JSON → adapter output   pi.on('tool_call') → adapter result
    Claude Code · Codex           Pi · omp
 ```
 
-Blocking uses **exit 2 + stderr**, not `permissionDecision` JSON — both process
-harnesses honour it identically, whereas Codex rejects a bare
-`permissionDecision: "allow"`. One code path, no branching.
+`checkTool()` returns the same global verdict for every raw payload dialect.
+Adapters translate that verdict:
+
+- Claude Code's interactive/default `PreToolUse` path returns
+  `permissionDecision: "ask"` so Claude owns the one-call prompt. Its
+  `dontAsk` and `bypassPermissions` modes stay on exit 2 + stderr.
+- Codex stays on exit 2 + stderr; its installed runtime rejects
+  `permissionDecision: "ask"`.
+- Pi and omp await one `ctx.ui.confirm()` only when `ctx.hasUI === true`.
+  Approval allows that exact call once; decline, timeout, cancellation, or no UI
+  returns `{block:true, reason}`. No approval persists.
+
+Allowed process calls remain exit 0 with no output. Context injection still uses
+the shared JSON `additionalContext` shape.
 
 ## Layout
 
@@ -52,20 +65,20 @@ src/core/            checkTool, config, normalisation, bash analysis
   guardrails/        secret · heavy-path · broad-glob
 src/tier-a/guard.mjs Claude Code + Codex
 src/tier-b/          shared.mjs + pi.mjs + omp.mjs
-test/                188 tests; payloads.mjs holds the four dialects
+test/                252 tests; payloads.mjs holds the four dialects
 scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
 ```
 
 ## Testing approach
 
 `test/payloads.mjs` expresses the same logical call in all four harness dialects.
-The parity suite asserts not only that each verdict is correct but that the four
-are **identical to one another** — that is the kit's central claim, so it is
-tested directly.
+The core parity suite asserts not only that each verdict is correct but that the
+four are **identical to one another** — the kit's central claim.
 
-Tier A is tested by spawning `guard.mjs` as a subprocess and asserting on the
-exit code, because the exit code *is* the contract. Tier B is tested through a
-fake `ExtensionAPI` shaped like Pi's.
+Tier A is tested by spawning `guard.mjs` with explicit Claude and Codex modes and
+asserting on the process contract. Tier B is tested through an async fake
+`ExtensionAPI` shaped like Pi's, including approval, denial, no-UI, and
+fail-open confirmation cases.
 
 A dedicated `false positives` suite guards the Phase 0 exit criterion of a zero
 false-positive rate — `git commit -m "fix .env loading"`, `rm -rf dist`,
@@ -143,9 +156,15 @@ outside this repo.
 }
 ```
 
-## Wiring it up (when ready to dogfood)
+Configuration is read afresh on every intercepted call, including in long-lived
+Pi and omp sessions. A malformed or missing layer contributes nothing and later
+layers still apply. Persistent exceptions use `allow` for `secret` and
+`heavyPath`, or `enabled:false` for `broadGlob`; interactive grants are
+one-call-only and are not written to disk.
 
-Not done yet, deliberately. One command covers all four harnesses:
+## Wiring it up
+
+One command covers all four harnesses:
 
 ```bash
 bash scripts/dev-link.sh            # dry run — read what it will touch
@@ -160,34 +179,42 @@ Then restart Claude Code and Codex; `/reload` in Pi and omp.
 Both scripts are dry-run unless given `--apply`, are idempotent, back up every
 file they edit, and accept `--only claude,pi` to wire a subset.
 
-Tier A entries are **appended** to `hooks.PreToolUse` with `jq` (required), never
-assigned — clobbering hooks you already have is the one unrecoverable mistake an
-installer can make. Uninstall filters that array by command path, so hooks added
-later survive.
+Tier A writes canonical nested `hooks.PreToolUse` groups with exact commands:
+
+```text
+node "<kit>/src/tier-a/guard.mjs" --harness claude
+node "<kit>/src/tier-a/guard.mjs" --harness codex
+```
+
+Reruns migrate the old mode-less command, wrong-harness mode, direct legacy
+entries, and duplicate harness-kit handlers without clobbering unrelated groups
+or handlers. `doctor` considers Tier A wired only when exactly one canonical
+nested handler has the expected harness-specific command. It asks Pi and omp
+whether the package is registered; the documented live block/pass smoke proves
+that the extension actually loaded and executes.
 
 Tier B registers through each agent's own package manager (`pi install`,
-`omp install`), which records the entry in its settings and links the checkout.
-The entry points come from the `pi` and `omp` keys in `package.json`. Both
-agents also auto-discover `~/.pi/agent/extensions/` and
-`~/.omp/agent/extensions/`, but a loose file there must be named `.ts` or `.js`
-— an earlier `dev-link.sh` linked `harness-kit.mjs` and discovery skipped it
-silently. Manifest-declared paths are exempt from that filter, so `install` is
-both the working route for `.mjs` and the better one: it registers in settings
-and supports `/reload`. `doctor` asks `pi list` / `omp plugin list` rather than
-looking for a file, so it cannot report "wired" for an extension that never
-loaded.
+`omp install`, or `omp plugin install`), which records the entry in its settings
+and links the checkout. The entry points come from the `pi` and `omp` keys in
+`package.json`. Both agents also auto-discover their extension directories, but
+a loose ambient file there must be named `.ts` or `.js`; manifest-declared
+`.mjs` entry points are the supported route.
 
-**Emergency off-switch**, faster than uninstalling and effective on the next tool
-call — no restart, no config surgery:
+**Emergency off-switch**, effective on the next tool call even in a long-lived
+Tier B session:
 
 ```bash
 echo '{"guardrails":{"heavyPath":{"enabled":false}}}' > ~/.harness-kit.json
 ```
 
+Use `guardrails.secret.allow` or `guardrails.heavyPath.allow` for persistent
+path exceptions, and disable the firing guardrail for a persistent broad-glob
+exception.
+
 ## Status against Phase 0
 
 Done: core, both adapters, three guardrails, context injection, tests, doctor,
-replay, and local wiring on all four harnesses.
+replay, and local wiring support on all four harnesses.
 
 Remaining: the two-week dogfood — the actual gate into Phase 1 — plus one open
 technical item: **Codex has never been exercised live.** Its payloads here have
