@@ -52,7 +52,7 @@ it in silence.
 
 | Harness | Evidence | Strength |
 |---|---|---|
-| Claude Code | 3,829 in-scope calls replayed from real transcripts; daily live use | Strong |
+| Claude Code | Daily live use; replay corpus: 4,248 calls, 3,993 in scope, 34 blocked (0.85%) | Strong |
 | Pi | Real payloads captured via spy extension; loader source read; live block tests | Strong |
 | omp | Same, plus binary inspected independently of pi | Strong |
 | Codex | Payload contract + decision contract read from the shipping binary's embedded schema and error strings. **No live run ever observed.** | Contract proven; behaviour unverified |

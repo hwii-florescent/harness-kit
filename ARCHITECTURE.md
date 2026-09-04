@@ -3,7 +3,8 @@
 One authored kit, four coding-agent harnesses.
 
 **Status:** Phase 0 implemented and wired locally. Not published.
-**Last verified:** 2026-09-03, against the installed CLIs and by running real agents.
+**Last verified:** 2026-09-04, against installed CLIs, captured payloads, and
+focused tests; Codex live execution remains unverified.
 
 Companion documents: [SCOPE.md](./SCOPE.md) for phasing, [AGENTS.md](./AGENTS.md)
 for orientation if you are picking this up cold.
@@ -139,7 +140,7 @@ harness-kit/
 │   └── guardrails/           secret · heavy-path · broad-glob
 ├── src/tier-a/guard.mjs      Claude Code + Codex
 ├── src/tier-b/               shared.mjs + pi.mjs + omp.mjs
-├── test/                     252 tests, node --test, no framework
+├── test/                     260 tests, node --test, no framework
 └── scripts/                  doctor · replay · dev-link · dev-unlink
 ```
 

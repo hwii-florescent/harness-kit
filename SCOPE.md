@@ -36,7 +36,7 @@ fortnight without switching it off, it is not ready for anyone else.
 ### Where it stands
 
 **Done.** Core, both adapters, three guardrails, context injection, live config
-layering, fail-open behavior, 252 tests, `doctor`, `replay`, and
+layering, fail-open behavior, 260 tests, `doctor`, `replay`, and
 `dev-link`/`dev-unlink`. Tier A wiring now carries explicit harness modes;
 Tier B interactive sessions can approve one exact blocked call.
 
@@ -76,7 +76,7 @@ manifest entry points or `-e` for ad-hoc runs.
 | Context injection | ✅ — and must not name the guardrails, see ARCHITECTURE.md §11 |
 | `doctor` | ✅ defensive Tier A inspection plus package-manager checks |
 | `replay` | ✅ false-positive rate against real history |
-| Tests | ✅ 252, zero dependencies |
+| Tests | ✅ 260, zero dependencies |
 
 ### Out of scope for Phase 0
 
@@ -100,7 +100,6 @@ manifest entry points or `-e` for ad-hoc runs.
 | 5 | Corrupting `core/index.mjs` fails open everywhere | ✅ 31 hostile payloads, 9 failure drills |
 | 6 | Editing a core file changes behaviour on all four with no re-link | ✅ |
 | 7 | `doctor` reports structural wiring/registration and versions; live loading is checked separately | ✅ |
-
 
 `doctor` is deliberately not a claim that a Tier B extension handler loaded:
 package-manager registration is necessary but the live block/pass smoke is the

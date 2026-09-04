@@ -10,7 +10,7 @@ have already cost time. Then [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
-npm test              # 252 tests, no dependencies
+npm test              # 260 tests, no dependencies
 npm run replay        # false-positive rate against real agent history
 npm run doctor        # which harnesses are installed / wired
 ```
@@ -70,7 +70,7 @@ src/core/            checkTool, config, normalisation, bash analysis
   guardrails/        secret · heavy-path · broad-glob
 src/tier-a/guard.mjs Claude Code + Codex
 src/tier-b/          shared.mjs + pi.mjs + omp.mjs
-test/                252 tests; payloads.mjs holds the four dialects
+test/                260 tests; payloads.mjs holds the four dialects
 scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
 ```
 
@@ -103,10 +103,11 @@ named `build`, and `grep -vE "node_modules|dist/"` was blocked for naming the
 very things it excludes. No hand-written case would have found that — you have
 to already suspect the collision to write the test.
 
-The rate is now **0.87%**, and what remains is the guardrail working: `cat
-.npmrc`, `ls node_modules`, `find dist -type f`. Run it after any change to
-`bash.mjs` or a guardrail, and read the remaining blocks rather than watching
-the number — each one should be a block you would defend.
+The latest recorded run covered **4,248 calls**, of which **3,993 were in
+scope** and **34 were blocked (0.85%)**. The remaining blocks are the guardrail
+working: `cat .npmrc`, `ls node_modules`, `find dist -type f`. Run it after any
+change to `bash.mjs` or a guardrail, and read the remaining blocks rather than
+watching the number — each one should be a block you would defend.
 
 `test/extraction.test.mjs` pins the classes replay uncovered so they cannot
 come back.
