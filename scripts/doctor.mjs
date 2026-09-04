@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const KIT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUARD_PREFIX = `node "${path.join(KIT, 'src/tier-a/guard.mjs')}"`;
+const PACKAGE_NAME = 'harness-kit';
+const OMP_EXTENSION = './src/tier-b/omp.mjs';
+const REAL_KIT = fs.realpathSync(KIT);
+
 const TIER_A_GUARDS = {
   claude: `${GUARD_PREFIX} --harness claude`,
   codex: `${GUARD_PREFIX} --harness codex`,
@@ -73,6 +77,41 @@ function registeredWith(bin, args, needle) {
   return `${r.stdout || ''}${r.stderr || ''}`.includes(needle);
 }
 
+function ompRegistered() {
+  const r = spawnSync('omp', ['plugin', 'list', '--json'], {
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  if (r.error || r.status !== 0) return false;
+
+  try {
+    const listing = JSON.parse(r.stdout || '');
+    const plugins = [
+      ...(Array.isArray(listing?.npm) ? listing.npm : []),
+      ...(Array.isArray(listing?.marketplace) ? listing.marketplace : []),
+    ];
+    return plugins.some((plugin) => {
+      if (!plugin || typeof plugin !== 'object'
+        || plugin.name !== PACKAGE_NAME
+        || plugin.enabled === false
+        || typeof plugin.path !== 'string'
+        || !Array.isArray(plugin.manifest?.extensions)
+        || !plugin.manifest.extensions.includes(OMP_EXTENSION)) {
+        return false;
+      }
+      try {
+        return fs.realpathSync(plugin.path) === REAL_KIT;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+
+
 const HARNESSES = [
   {
     name: 'Claude Code',
@@ -105,7 +144,7 @@ const HARNESSES = [
     name: 'omp',
     tier: 'B',
     bin: 'omp',
-    wired: () => registeredWith('omp', ['plugin', 'list'], 'harness-kit'),
+    wired: () => ompRegistered(),
     wiring: 'omp install <kit>',
   },
 ];

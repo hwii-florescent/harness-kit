@@ -62,6 +62,26 @@ function runDoctor(sandbox) {
     env: envFor(sandbox),
   });
 }
+function setOmpListing(sandbox, listing) {
+  const listingFile = path.join(sandbox.root, 'omp-list.json');
+  writeJson(listingFile, listing);
+  const quoted = listingFile.replaceAll("'", "'\"'\"'");
+  const file = path.join(sandbox.bin, 'omp');
+  fs.writeFileSync(file, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' 'fake omp'
+elif [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  cat '${quoted}'
+else
+  printf '%s\n' 'fake omp'
+fi
+`);
+  fs.chmodSync(file, 0o755);
+}
+
+function ompStatusLine(result) {
+  return result.stdout.split('\n').find((entry) => /\bomp\s/.test(entry));
+}
 
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value));
@@ -282,4 +302,37 @@ describe('doctor Tier A wiring detection', () => {
     assert.ok(line);
     assert.match(line.replace(ANSI, ''), /not wired$/);
   });
+});
+
+describe('doctor OMP registration detection', () => {
+  const valid = (overrides = {}) => ({
+    name: 'harness-kit',
+    path: REPO,
+    manifest: { extensions: ['./src/tier-b/omp.mjs'] },
+    enabled: true,
+    ...overrides,
+  });
+
+  test('recognizes the exact enabled checkout registration', (t) => {
+    const sandbox = makeSandbox(t, 'harness-kit-doctor-omp-valid');
+    setOmpListing(sandbox, { npm: [valid()] });
+    const result = runDoctor(sandbox);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(ompStatusLine(result).replace(ANSI, ''), /wired$/);
+  });
+
+  for (const [label, entry] of [
+    ['a package-name prefix lookalike', valid({ name: 'other-harness-kit' })],
+    ['a different checkout path', valid({ path: '/tmp' })],
+    ['a missing omp entry point', valid({ manifest: { extensions: ['./src/tier-b/pi.mjs'] } })],
+    ['a disabled registration', valid({ enabled: false })],
+  ]) {
+    test(`rejects ${label}`, (t) => {
+      const sandbox = makeSandbox(t, `harness-kit-doctor-omp-${label.replaceAll(' ', '-')}`);
+      setOmpListing(sandbox, { npm: [entry] });
+      const result = runDoctor(sandbox);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(ompStatusLine(result).replace(ANSI, ''), /not wired$/);
+    });
+  }
 });
