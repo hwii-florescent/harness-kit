@@ -62,12 +62,12 @@ it in silence.
 The approval contract is intentionally different at the adapter boundary while
 the core verdict remains shared:
 
-- **Claude Code 2.1.259:** the Tier A tests assert the exact
+- **Claude Code 2.1.260:** the Tier A tests assert the exact
   `PreToolUse` `hookSpecificOutput.permissionDecision:"ask"` response for
   interactive/default mode, and exit 2 with stderr for `dontAsk` and
   `bypassPermissions`. This implementation does not register
   `PermissionRequest`.
-- **Pi 0.84.2 and omp 18.1.6:** the shared Tier B tests await an async
+- **Pi 0.84.2 and omp 18.1.10:** the shared Tier B tests await an async
   `tool_call` handler, assert one literal-`true` `ctx.ui.confirm()` approval,
   and assert that a non-`true` result or no UI keeps the original
   `{block:true,reason}`. A confirmation exception fails open and is logged.

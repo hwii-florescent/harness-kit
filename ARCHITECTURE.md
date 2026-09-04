@@ -30,7 +30,7 @@ been a silent one — a guardrail reporting itself active while absent. See §11
 Verified against installed CLIs, and — where marked — by running the agent and
 observing what it actually does.
 
-| | **Claude Code** `2.1.259` | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.6` |
+| | **Claude Code** `2.1.260` | **Codex** `0.146.0` | **Pi** `0.84.2` | **omp** `18.1.10` |
 |---|---|---|---|---|
 | Interception model | process hook | process hook | in-process ESM | in-process ESM |
 | Hook config | `~/.claude/settings.json` → `hooks` | `~/.codex/hooks.json` | — (extensions) | — (extensions) |
