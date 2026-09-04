@@ -272,6 +272,25 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" PreToolUse \
      hooks: [{ type: "command", command: $cmd, timeout: 10 }]
    }])'
 
+# SessionStart fires once per session and carries only the invariant
+# guardrail-hook paragraph (see context.mjs's header for the split this
+# feeds). Confirmed against both installed binaries before wiring it: Claude
+# Code 2.1.260's embedded hook docs list SessionStart as a real event with the
+# same `hookSpecificOutput.additionalContext` output shape UserPromptSubmit
+# already uses below, and Codex 0.146.0 ships a
+# `session-start.command.output` JSON Schema with an identical
+# `{hookEventName: "SessionStart", additionalContext}` shape. No `$matcher` —
+# same reasoning as UserPromptSubmit below, there is no tool to dispatch on.
+wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" SessionStart \
+  '.hooks[$event] = ((.hooks[$event] // []) + [{
+     hooks: [{ type: "command", command: $cmd, timeout: 10, statusMessage: "Checking harness-kit guardrails" }]
+   }])'
+
+wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" SessionStart \
+  '.hooks[$event] = ((.hooks[$event] // []) + [{
+     hooks: [{ type: "command", command: $cmd, timeout: 10 }]
+   }])'
+
 # UserPromptSubmit has no tool to dispatch on, so — like Codex's PreToolUse
 # entry above — the template simply never references $matcher; jq's --arg
 # still passes it (wire_tier_a's jq call reads the script-global $MATCHER for
@@ -281,6 +300,10 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" PreToolUse \
 # invoked it because no hook was registered for the event. That is the
 # mitigation ARCHITECTURE.md §11 describes for agents pre-empting the
 # guardrails — it has never actually run on Claude Code until this entry.
+# Still wired even though context.mjs's session/turn split currently gives it
+# nothing to say on any given turn (see context.mjs's header) — removing the
+# hook outright rather than leaving it a deliberately quiet no-op is a call
+# for whoever owns this design next, not one made here.
 wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" UserPromptSubmit \
   '.hooks[$event] = ((.hooks[$event] // []) + [{
      hooks: [{ type: "command", command: $cmd, timeout: 10, statusMessage: "Checking harness-kit guardrails" }]

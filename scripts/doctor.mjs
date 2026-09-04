@@ -108,8 +108,16 @@ function probeCrashCount() {
 // "wired" requires both: the config registers the event with a command that
 // resolves to THIS kit, and running that exact command demonstrates the
 // behaviour the registration is supposed to buy.
+//
+// SessionStart joined PreToolUse/UserPromptSubmit here when context.mjs
+// split its payload by how often it can change: the invariant
+// guardrail-hook paragraph now lives at SessionStart (once per session)
+// instead of UserPromptSubmit (every turn). UserPromptSubmit stays required
+// too — dev-link.sh still wires it — but its probe below no longer demands
+// non-empty content, because phase 'turn' has none to give; see
+// probeTurnContext.
 
-const REQUIRED_EVENTS = ['PreToolUse', 'UserPromptSubmit'];
+const REQUIRED_EVENTS = ['PreToolUse', 'SessionStart', 'UserPromptSubmit'];
 const GUARD = path.join(KIT, 'src', 'tier-a', 'guard.mjs');
 
 /**
@@ -195,18 +203,44 @@ function probeSecretBlock(entries) {
   });
 }
 
-/** Live probe: for every configured UserPromptSubmit entry, it must exit 0 and emit `additionalContext`. */
-function probeContextInjection(entries) {
+/**
+ * Live probe: for every configured SessionStart entry, it must exit 0 and
+ * emit the invariant guardrail-hook paragraph via `additionalContext`. This
+ * is the probe that used to run against UserPromptSubmit, moved here with
+ * the payload it checks for — see context.mjs's header for the split.
+ * Matching on "guardrail hook" (not just non-empty) catches the specific
+ * regression this file exists to catch: content arriving from the wrong
+ * phase, or the invariant paragraph silently dropping the "don't anticipate
+ * it" language ARCHITECTURE.md §11 requires.
+ */
+function probeSessionContext(entries) {
   if (!entries.length) return false;
   return entries.every((e) => {
-    const r = runConfiguredCommand(e.command, { hook_event_name: 'UserPromptSubmit', cwd: KIT });
+    const r = runConfiguredCommand(e.command, { hook_event_name: 'SessionStart', cwd: KIT });
     if (r.error || r.status !== 0) return false;
     try {
       const parsed = JSON.parse(r.stdout || '{}');
-      return Boolean(parsed?.hookSpecificOutput?.additionalContext);
+      return /guardrail hook/.test(parsed?.hookSpecificOutput?.additionalContext ?? '');
     } catch {
       return false;
     }
+  });
+}
+
+/**
+ * Live probe: for every configured UserPromptSubmit entry, it must exit 0.
+ * Unlike probeSessionContext above, this does NOT require `additionalContext`
+ * — phase 'turn' has nothing to inject today (the project/lockfile line that
+ * used to live here failed context.mjs's own "cheaply discoverable" bar and
+ * was dropped rather than moved; see context.mjs's header). Requiring
+ * non-empty output here would make doctor report a correctly-wired,
+ * correctly-silent hook as broken on every single run.
+ */
+function probeTurnContext(entries) {
+  if (!entries.length) return false;
+  return entries.every((e) => {
+    const r = runConfiguredCommand(e.command, { hook_event_name: 'UserPromptSubmit', cwd: KIT });
+    return !r.error && r.status === 0;
   });
 }
 
@@ -243,14 +277,18 @@ function probeLine(label, ok, explainedByDisable) {
  * Conflating the two used to print `half-wired` (red) for the single most
  * routine use of the kill switch. Reported as its own `disabled` state.
  */
-function classify({ configWired, noneConfigured, matcherOk, secretProbeOk, contextProbeOk, secretEnabled, anyGuardrailEnabled }) {
+function classify({ configWired, noneConfigured, matcherOk, secretProbeOk, sessionProbeOk, turnProbeOk, secretEnabled, anyGuardrailEnabled }) {
   if (noneConfigured) return 'not-wired';
   if (!configWired) return 'half-wired';
   if (!matcherOk) return 'half-wired';
-  if (secretProbeOk && contextProbeOk) return 'wired';
+  // turnProbeOk isn't part of the disabled-by-config story below — it never
+  // depended on guardrail config, only on the hook running at all — so a
+  // failure here is always a real fault, not a routine kill-switch use.
+  if (!turnProbeOk) return 'half-wired';
+  if (secretProbeOk && sessionProbeOk) return 'wired';
   const secretExplained = secretProbeOk || !secretEnabled;
-  const contextExplained = contextProbeOk || !anyGuardrailEnabled;
-  if (secretExplained && contextExplained) return 'disabled';
+  const sessionExplained = sessionProbeOk || !anyGuardrailEnabled;
+  if (secretExplained && sessionExplained) return 'disabled';
   return 'half-wired';
 }
 
@@ -267,14 +305,14 @@ const HARNESSES = [
     tier: 'A',
     bin: 'claude',
     hookFiles: ['settings.json', 'settings.local.json'].map((f) => path.join(HOME, '.claude', f)),
-    wiring: '~/.claude/settings.json → hooks.PreToolUse + hooks.UserPromptSubmit',
+    wiring: '~/.claude/settings.json → hooks.PreToolUse + hooks.SessionStart + hooks.UserPromptSubmit',
   },
   {
     name: 'Codex',
     tier: 'A',
     bin: 'codex',
     hookFiles: [path.join(HOME, '.codex', 'hooks.json')],
-    wiring: '~/.codex/hooks.json → hooks.PreToolUse + hooks.UserPromptSubmit',
+    wiring: '~/.codex/hooks.json → hooks.PreToolUse + hooks.SessionStart + hooks.UserPromptSubmit',
   },
   {
     name: 'Pi',
@@ -320,7 +358,8 @@ for (const h of HARNESSES) {
     );
 
     const rawSecretProbe = probeSecretBlock(events.PreToolUse);
-    const rawContextProbe = probeContextInjection(events.UserPromptSubmit);
+    const rawSessionProbe = probeSessionContext(events.SessionStart);
+    const rawTurnProbe = probeTurnContext(events.UserPromptSubmit);
     const matcherOk = events.PreToolUse.length === 0 || events.PreToolUse.some((e) => matcherCoversRead(e.matcher));
 
     const state = classify({
@@ -328,7 +367,8 @@ for (const h of HARNESSES) {
       noneConfigured,
       matcherOk,
       secretProbeOk: rawSecretProbe,
-      contextProbeOk: rawContextProbe,
+      sessionProbeOk: rawSessionProbe,
+      turnProbeOk: rawTurnProbe,
       secretEnabled,
       anyGuardrailEnabled,
     });
@@ -351,12 +391,12 @@ for (const h of HARNESSES) {
           `    ${red(`matcher excludes Read — a Read of a secrets file would never reach this hook (matcher: ${matchers.join(', ')})`)}`,
         );
       }
-      if (!events.UserPromptSubmit.length) {
-        console.log(`    ${red('context injection is OFF — no UserPromptSubmit hook, buildContext() never runs')}`);
+      if (!events.SessionStart.length) {
+        console.log(`    ${red('session context injection is OFF — no SessionStart hook, the guardrail-hook paragraph never runs')}`);
       }
       if (!noneConfigured) {
         console.log(
-          `    live probe — ${probeLine('secret-file block', rawSecretProbe, !secretEnabled)}, ${probeLine('context injection', rawContextProbe, !anyGuardrailEnabled)}`,
+          `    live probe — ${probeLine('secret-file block', rawSecretProbe, !secretEnabled)}, ${probeLine('session context', rawSessionProbe, !anyGuardrailEnabled)}, ${probeLine('UserPromptSubmit hook', rawTurnProbe, false)}`,
         );
       }
       for (const err of parseErrors) console.log(`    ${red(err)}`);

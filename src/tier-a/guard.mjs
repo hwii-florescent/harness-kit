@@ -22,6 +22,13 @@ import { logCrash } from '../core/log.mjs';
 const EXIT_ALLOW = 0;
 const EXIT_BLOCK = 2;
 
+// Both events only ever inject context, never block, so they share one
+// branch below. Which phase each gets is the whole point of the split in
+// context.mjs: SessionStart fires once per session and carries the
+// invariant guardrail-hook paragraph; UserPromptSubmit fires every turn and
+// — see context.mjs's header — has nothing to say today.
+const CONTEXT_PHASE = { SessionStart: 'session', UserPromptSubmit: 'turn' };
+
 // A closed or empty stdin — the harness ran the hook with nothing to send, or
 // stdin is a non-blocking TTY with no data queued — surfaces as one of these
 // two codes and is expected and documented. Anything else (EIO, EBADF, a
@@ -64,11 +71,11 @@ async function main() {
 
   const event = payload.hook_event_name ?? payload.hookEventName ?? payload.event ?? 'PreToolUse';
 
-  if (event === 'UserPromptSubmit') {
-    const additionalContext = buildContext({ cwd: payload.cwd });
+  if (event in CONTEXT_PHASE) {
+    const additionalContext = buildContext({ cwd: payload.cwd, phase: CONTEXT_PHASE[event] });
     if (additionalContext) {
       process.stdout.write(JSON.stringify({
-        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext },
+        hookSpecificOutput: { hookEventName: event, additionalContext },
       }));
     }
     return EXIT_ALLOW;

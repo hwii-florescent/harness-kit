@@ -33,10 +33,16 @@ export function install(pi, { harness = 'pi' } = {}) {
     return undefined; // allow
   });
 
-  // Context injection. Pi's analogue of Claude Code's UserPromptSubmit.
+  // Context injection. before_agent_start fires once per agent start, not
+  // per turn — already session-scoped, unlike Claude Code/Codex's
+  // UserPromptSubmit. So it always asks for phase 'session' (the invariant
+  // guardrail-hook paragraph split out in context.mjs) and there is no
+  // Tier B equivalent of a per-turn hook to wire up: Pi and omp expose no
+  // turn-boundary event, so phase 'turn' has nowhere to fire from even if it
+  // ever had content.
   pi.on('before_agent_start', (event, ctx) => {
     try {
-      const content = buildContext({ cwd: ctx?.cwd });
+      const content = buildContext({ cwd: ctx?.cwd, phase: 'session' });
       if (content) {
         return { message: { customType: 'harness-kit', content, display: false } };
       }

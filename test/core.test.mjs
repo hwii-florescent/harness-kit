@@ -10,8 +10,11 @@ process.env.HK_NO_GLOBAL_CONFIG = '1';
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-import { checkTool } from '../src/core/index.mjs';
+import { checkTool, buildContext } from '../src/core/index.mjs';
 import { normalize, KIND } from '../src/core/normalize.mjs';
 import { isAllowedCommand, splitCompound, unwrapShellExecutor, stripPrefix } from '../src/core/bash.mjs';
 import { CWD, CASES, everyHarness, claude, pi } from './payloads.mjs';
@@ -336,5 +339,59 @@ describe('bash analysis', () => {
     assert.equal(isAllowedCommand('cargo test'), true);
     assert.equal(isAllowedCommand('ls node_modules'), false);
     assert.equal(isAllowedCommand('cat dist/x.js'), false);
+  });
+});
+
+// ── Context injection: session/turn split ───────────────────────────────────
+//
+// See context.mjs's header for the design this pins: the invariant
+// guardrail-hook paragraph lives at phase 'session' (built once per
+// session), and phase 'turn' (built every turn) has nothing to say today —
+// the project/lockfile line that used to ride along on every turn was
+// dropped, not relocated, for failing context.mjs's own "cheaply
+// discoverable" bar.
+
+describe('context injection: session/turn split', () => {
+  test('phase "session" carries the invariant guardrail-hook paragraph, unnamed', () => {
+    const text = buildContext({ cwd: CWD, phase: 'session' });
+    assert.match(text, /^## harness-kit/);
+    assert.match(text, /guardrail hook/);
+    // AGENTS.md trap 2 / ARCHITECTURE.md §11: this is the property that
+    // broke agents into simulating the rules instead of relying on the hook.
+    assert.doesNotMatch(text, /secret|heavyPath|broadGlob/i);
+  });
+
+  test('phase "turn" is empty — nothing survives the split as per-turn content', () => {
+    assert.equal(buildContext({ cwd: CWD, phase: 'turn' }), '');
+  });
+
+  test('omitting phase defaults to "turn" (empty), not "session"', () => {
+    // A call site that forgets to pass phase must fail toward saying
+    // nothing, not toward re-injecting the guardrail paragraph on every
+    // turn by accident — see the default in context.mjs's signature.
+    assert.equal(buildContext({ cwd: CWD }), '');
+  });
+
+  test('phase "session" is silent when every guardrail is disabled', () => {
+    // There is nothing to warn about pre-empting if no guardrail can ever
+    // block a call. Exercised against a real project config file — not an
+    // injected override, since buildContext() takes none — so this also
+    // pins that loadConfig() is actually consulted, not bypassed.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hk-context-test-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, '.harness-kit.json'),
+        JSON.stringify({
+          guardrails: {
+            secret: { enabled: false },
+            heavyPath: { enabled: false },
+            broadGlob: { enabled: false },
+          },
+        }),
+      );
+      assert.equal(buildContext({ cwd: dir, phase: 'session' }), '');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

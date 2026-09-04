@@ -71,13 +71,17 @@ for (const [name, extension] of [['pi', piExtension], ['omp', ompExtension]]) {
       assert.equal(api.emit('tool_call', piPayload('bash', { command: 'npm run build' })), undefined);
     });
 
-    test('injects context on before_agent_start', () => {
+    test('injects the session-scoped guardrail-hook context on before_agent_start', () => {
+      // Unconditional on purpose — mirrors the Tier A SessionStart fix in
+      // tier-a.test.mjs. before_agent_start fires once per agent start, so
+      // it always asks context.mjs for phase 'session' (see shared.mjs),
+      // and default guardrail config always yields the invariant paragraph.
       const api = mount(extension);
       const result = api.emit('before_agent_start', { prompt: 'hi' });
-      if (result) {
-        assert.equal(result.message.customType, 'harness-kit');
-        assert.equal(typeof result.message.content, 'string');
-      }
+      assert.equal(result.message.customType, 'harness-kit');
+      assert.match(result.message.content, /guardrail hook/);
+      // AGENTS.md trap 2 / ARCHITECTURE.md §11.
+      assert.doesNotMatch(result.message.content, /secret|heavyPath|broadGlob/i);
     });
 
     test('fails open on a malformed event', () => {

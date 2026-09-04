@@ -198,20 +198,37 @@ describe('tier A: Claude Code and Codex agree', () => {
 });
 
 describe('tier A: event routing', () => {
-  test('UserPromptSubmit returns context JSON and allows', () => {
-    // Unconditional on purpose: the previous commit is what made context
-    // injection actually run in production, and a test that only checks the
-    // shape *when* stdout is non-empty cannot tell "wired and working" from
-    // "wired and mute" — buildContext() returning '' would still pass it.
-    // Default guardrail config always yields non-empty context (at least the
-    // "don't pre-empt a block" line — see context.mjs), so this is safe to
-    // assert unconditionally rather than pinning context.mjs's exact prose.
-    const r = run(claude('', {}, 'UserPromptSubmit'));
+  test('SessionStart returns the invariant guardrail-hook context and allows', () => {
+    // Unconditional on purpose, taking over the property the old
+    // UserPromptSubmit test in this spot used to pin: a test that only
+    // checks the shape *when* stdout is non-empty cannot tell "wired and
+    // working" from "wired and mute" — buildContext() returning '' would
+    // still pass it. Default guardrail config always yields the invariant
+    // paragraph (see context.mjs), so this is safe to assert unconditionally
+    // without pinning its exact prose beyond the one phrase §11 requires.
+    const r = run(claude('', {}, 'SessionStart'));
     assert.equal(r.code, ALLOW);
     const parsed = JSON.parse(r.stdout);
-    assert.equal(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
     assert.equal(typeof parsed.hookSpecificOutput.additionalContext, 'string');
-    assert.notEqual(parsed.hookSpecificOutput.additionalContext, '', 'context injection must not be silently mute');
+    assert.notEqual(parsed.hookSpecificOutput.additionalContext, '', 'session context must not be silently mute');
+    assert.match(parsed.hookSpecificOutput.additionalContext, /guardrail hook/);
+    // AGENTS.md trap 2 / ARCHITECTURE.md §11: naming the guardrails here is
+    // what caused agents to simulate the rules and refuse pre-emptively.
+    assert.doesNotMatch(parsed.hookSpecificOutput.additionalContext, /secret|heavyPath|broadGlob/i);
+  });
+
+  test('UserPromptSubmit allows and injects nothing (no per-turn content today)', () => {
+    // context.mjs's session/turn split moved the only content that used to
+    // live here (the invariant paragraph) to SessionStart above, and the one
+    // candidate for genuinely per-turn content — the project/lockfile line —
+    // was dropped rather than kept, because it failed context.mjs's own
+    // "cheaply discoverable" bar. So today this event legitimately has
+    // nothing to say; pinned here so a future addition changes this test on
+    // purpose rather than by accident.
+    const r = run(claude('', {}, 'UserPromptSubmit'));
+    assert.equal(r.code, ALLOW);
+    assert.equal(r.stdout, '', 'nothing worth injecting every turn today — see context.mjs');
   });
 
   test('ignores events it does not handle', () => {
