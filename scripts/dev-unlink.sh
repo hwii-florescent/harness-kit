@@ -3,7 +3,8 @@
 # Undo scripts/dev-link.sh for every harness, in one command.
 #
 # Removes only what points into THIS checkout:
-#   Tier A  PreToolUse entries whose command names $KIT — other hooks are kept
+#   Tier A  every hook entry, under any event, whose command names $KIT —
+#           hooks belonging to anything else are kept
 #   Tier B  the registration made by `pi install` / `omp install`
 #
 # Dry run unless you pass --apply. Backs up every file it edits.

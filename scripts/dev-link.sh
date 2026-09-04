@@ -2,7 +2,8 @@
 #
 # Wire this checkout into every harness on THIS machine, in one command.
 #
-#   Tier A (Claude Code, Codex)  a PreToolUse entry appended to their JSON config
+#   Tier A (Claude Code, Codex)  PreToolUse + SessionStart entries appended to
+#                                their JSON config
 #   Tier B (Pi, omp)             registered via `pi install` / `omp install`
 #
 # Everything it writes is OUTSIDE the repo. It is a dry run unless you pass
