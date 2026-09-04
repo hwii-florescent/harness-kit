@@ -75,11 +75,6 @@ unwire_tier_a() {
     return 0
   fi
 
-  if ! grep -qF "$KIT" "$file" 2>/dev/null; then
-    skip "$name — not wired"
-    return 0
-  fi
-
   if ! have jq; then
     fail "$name — jq is required to unwire Tier A (brew install jq)"
     FAILED=1
@@ -89,6 +84,37 @@ unwire_tier_a() {
   if ! jq -e . "$file" >/dev/null 2>&1; then
     fail "$name — $file is not valid JSON, left untouched"
     FAILED=1
+    return 0
+  fi
+
+  # A path in unrelated configuration must not make this file look wired.
+  # Only count handlers that can be removed without guessing at malformed
+  # hook shapes.
+  if ! jq -e --arg kit "$KIT" '
+        def owned_command:
+          if (type == "object") then
+            if (has("command") and (.command | type == "string"))
+            then (.command | contains($kit))
+            else false
+            end
+          else false
+          end;
+        def removable_group:
+          if (type != "object") then false
+          elif (has("hooks")) then
+            if ((.hooks | type) == "array")
+            then (owned_command or any(.hooks[]; owned_command))
+            else false
+            end
+          else owned_command
+          end;
+        if (type != "object") then false
+        elif ((.hooks? | type) != "object") then false
+        elif ((.hooks.PreToolUse? | type) != "array") then false
+        else any(.hooks.PreToolUse[]; removable_group)
+        end
+      ' "$file" >/dev/null; then
+    skip "$name — no owned PreToolUse entry"
     return 0
   fi
 
@@ -102,22 +128,34 @@ unwire_tier_a() {
   tmp="$(mktemp)"
   # Remove only owned handlers. If a group also contains unrelated handlers,
   # retain the group and its metadata instead of deleting the user's hooks.
+  # Malformed hook shapes are preserved rather than guessed at or discarded.
   if jq --arg kit "$KIT" '
-        def owned($value):
-          if ($value | type) == "string" then ($value | contains($kit)) else false end;
+        def owned_command:
+          if (type == "object") then
+            if (has("command") and (.command | type == "string"))
+            then (.command | contains($kit))
+            else false
+            end
+          else false
+          end;
+        def metadata_count:
+          [to_entries[] | select(.key != "command" and .key != "hooks")] | length;
         def clean_group:
           if (type != "object") then .
-          elif owned(.command) then
+          elif (has("hooks")) then
+            if ((.hooks | type) != "array") then .
+            else
+              (owned_command) as $owned
+              | .hooks |= map(select(owned_command | not))
+              | if $owned then del(.command) else . end
+              | if ((.hooks | length) == 0) then
+                  if (metadata_count == 0) then empty else del(.hooks) end
+                else .
+                end
+            end
+          elif owned_command then
             del(.command)
-            | if (.hooks? | type) == "array" then
-                .hooks |= map(select(owned(.command) | not))
-                | if (.hooks | length) == 0 then empty else . end
-              else empty
-              end
-          elif ((.hooks? | type) == "array")
-            and any(.hooks[]; owned(.command)) then
-            .hooks |= map(select(owned(.command) | not))
-            | if (.hooks | length) == 0 then empty else . end
+            | if (metadata_count == 0) then empty else . end
           else .
           end;
         if ((.hooks? | type) == "object")
@@ -137,7 +175,6 @@ unwire_tier_a() {
     fail "$name — jq failed, $file unchanged"
     FAILED=1
   fi
-
 }
 # ── Tier B ──────────────────────────────────────────────────────────────────
 #
