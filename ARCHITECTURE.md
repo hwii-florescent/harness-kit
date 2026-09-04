@@ -90,6 +90,7 @@ Pi and omp await `ctx.ui.confirm()` only when `ctx.hasUI === true`; a literal
 while a confirmation exception fails open. The
 documented Claude `PermissionRequest` event exists, but this implementation does
 not register it.
+
 ---
 ## 3. The core insight: two tiers, not four adapters
 

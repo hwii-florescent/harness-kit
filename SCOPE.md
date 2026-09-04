@@ -35,7 +35,6 @@ fortnight without switching it off, it is not ready for anyone else.
 
 ### Where it stands
 
-
 **Done.** Core, both adapters, three guardrails, context injection, live config
 layering, fail-open behavior, 274 tests, `doctor`, `replay`, and
 `dev-link`/`dev-unlink`. Tier A wiring now carries explicit harness modes;
@@ -43,7 +42,6 @@ Tier B interactive sessions can approve one exact blocked call.
 
 **Remaining: the dogfood itself.** That is a calendar item, not a code item, and
 it is the actual gate into Phase 1. Codex live behavior remains unverified.
-
 
 ### Local wiring
 
