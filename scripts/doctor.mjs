@@ -79,7 +79,7 @@ function probeCrashCount() {
 // Tier A used to be graded by grepping the harness's hook file for the kit
 // path — `fileMentionsKit()`, since removed. That check is circular for the
 // same reason trap 1 in AGENTS.md is: it finds *an* entry mentioning the kit
-// and stops looking, so a config wiring `PreToolUse` but not `UserPromptSubmit`
+// and stops looking, so a config wiring `PreToolUse` but not `SessionStart`
 // reads identically to one wiring both. Live proof: on this author's machine
 // harness-kit was registered under PreToolUse only — context injection had
 // never run — and the old check printed a green "wired" anyway.
@@ -109,15 +109,27 @@ function probeCrashCount() {
 // resolves to THIS kit, and running that exact command demonstrates the
 // behaviour the registration is supposed to buy.
 //
-// SessionStart joined PreToolUse/UserPromptSubmit here when context.mjs
-// split its payload by how often it can change: the invariant
-// guardrail-hook paragraph now lives at SessionStart (once per session)
-// instead of UserPromptSubmit (every turn). UserPromptSubmit stays required
-// too — dev-link.sh still wires it — but its probe below no longer demands
-// non-empty content, because phase 'turn' has none to give; see
-// probeTurnContext.
+// SessionStart joined PreToolUse here when context.mjs split its payload by
+// how often it can change: the invariant guardrail-hook paragraph now lives
+// at SessionStart (once per session). UserPromptSubmit — every turn, and
+// only ever '' under today's session/turn split (see context.mjs's header)
+// — is deliberately NOT required: dev-link.sh stopped wiring it, because a
+// hook whose only correct output is silence is indistinguishable from a
+// broken one, the exact silent-absence failure this file exists to catch.
+// See dev-link.sh's comment at the removed call site for the full reasoning.
+// This does not reopen defect #1 (context injection never running on Claude
+// Code) — that stays closed via SessionStart.
+//
+// A machine wired by the previous commit can still carry a UserPromptSubmit
+// entry for this kit. That is harmless (guard.mjs still handles the event —
+// see its CONTEXT_PHASE comment — and phase 'turn' has nothing to inject),
+// so it is neither required for "wired" nor an error; see STALE_EVENTS below
+// for how it's surfaced instead of silently ignored.
 
-const REQUIRED_EVENTS = ['PreToolUse', 'SessionStart', 'UserPromptSubmit'];
+const REQUIRED_EVENTS = ['PreToolUse', 'SessionStart'];
+// Events this kit used to wire but no longer does. Purely informational —
+// see the STALE_EVENTS handling below and the comment above.
+const STALE_EVENTS = ['UserPromptSubmit'];
 const GUARD = path.join(KIT, 'src', 'tier-a', 'guard.mjs');
 
 /**
@@ -158,9 +170,14 @@ function findWiredEntries(hooksForEvent) {
  * fails `JSON.parse` is reported explicitly rather than silently read as
  * "nothing configured" — a hand-edit gone bad should not look like a clean
  * slate.
+ *
+ * Also collects STALE_EVENTS the same way, from the same parse, so a machine
+ * still carrying a UserPromptSubmit entry from the previous commit's wiring
+ * is visible without a second file read or a second set of parse errors.
  */
 function checkTierAConfig(files) {
   const events = Object.fromEntries(REQUIRED_EVENTS.map((e) => [e, []]));
+  const stale = Object.fromEntries(STALE_EVENTS.map((e) => [e, []]));
   const parseErrors = [];
   for (const file of files) {
     if (!fs.existsSync(file)) continue;
@@ -175,8 +192,11 @@ function checkTierAConfig(files) {
     for (const event of REQUIRED_EVENTS) {
       events[event].push(...findWiredEntries(hooks[event]));
     }
+    for (const event of STALE_EVENTS) {
+      stale[event].push(...findWiredEntries(hooks[event]));
+    }
   }
-  return { events, parseErrors };
+  return { events, stale, parseErrors };
 }
 
 /** Run one configured command exactly as the harness would: a shell string, payload on stdin. */
@@ -228,23 +248,6 @@ function probeSessionContext(entries) {
 }
 
 /**
- * Live probe: for every configured UserPromptSubmit entry, it must exit 0.
- * Unlike probeSessionContext above, this does NOT require `additionalContext`
- * — phase 'turn' has nothing to inject today (the project/lockfile line that
- * used to live here failed context.mjs's own "cheaply discoverable" bar and
- * was dropped rather than moved; see context.mjs's header). Requiring
- * non-empty output here would make doctor report a correctly-wired,
- * correctly-silent hook as broken on every single run.
- */
-function probeTurnContext(entries) {
-  if (!entries.length) return false;
-  return entries.every((e) => {
-    const r = runConfiguredCommand(e.command, { hook_event_name: 'UserPromptSubmit', cwd: KIT });
-    return !r.error && r.status === 0;
-  });
-}
-
-/**
  * A Claude Code `matcher` is a `|`-separated list of tool names (dev-link.sh
  * writes e.g. `"Bash|Read|Write|..."`); an absent matcher fires for every
  * tool. The probe above runs the configured command directly and so never
@@ -277,14 +280,10 @@ function probeLine(label, ok, explainedByDisable) {
  * Conflating the two used to print `half-wired` (red) for the single most
  * routine use of the kill switch. Reported as its own `disabled` state.
  */
-function classify({ configWired, noneConfigured, matcherOk, secretProbeOk, sessionProbeOk, turnProbeOk, secretEnabled, anyGuardrailEnabled }) {
+function classify({ configWired, noneConfigured, matcherOk, secretProbeOk, sessionProbeOk, secretEnabled, anyGuardrailEnabled }) {
   if (noneConfigured) return 'not-wired';
   if (!configWired) return 'half-wired';
   if (!matcherOk) return 'half-wired';
-  // turnProbeOk isn't part of the disabled-by-config story below — it never
-  // depended on guardrail config, only on the hook running at all — so a
-  // failure here is always a real fault, not a routine kill-switch use.
-  if (!turnProbeOk) return 'half-wired';
   if (secretProbeOk && sessionProbeOk) return 'wired';
   const secretExplained = secretProbeOk || !secretEnabled;
   const sessionExplained = sessionProbeOk || !anyGuardrailEnabled;
@@ -305,14 +304,14 @@ const HARNESSES = [
     tier: 'A',
     bin: 'claude',
     hookFiles: ['settings.json', 'settings.local.json'].map((f) => path.join(HOME, '.claude', f)),
-    wiring: '~/.claude/settings.json → hooks.PreToolUse + hooks.SessionStart + hooks.UserPromptSubmit',
+    wiring: '~/.claude/settings.json → hooks.PreToolUse + hooks.SessionStart',
   },
   {
     name: 'Codex',
     tier: 'A',
     bin: 'codex',
     hookFiles: [path.join(HOME, '.codex', 'hooks.json')],
-    wiring: '~/.codex/hooks.json → hooks.PreToolUse + hooks.SessionStart + hooks.UserPromptSubmit',
+    wiring: '~/.codex/hooks.json → hooks.PreToolUse + hooks.SessionStart',
   },
   {
     name: 'Pi',
@@ -345,7 +344,7 @@ for (const h of HARNESSES) {
   installed++;
 
   if (h.tier === 'A') {
-    const { events, parseErrors } = checkTierAConfig(h.hookFiles);
+    const { events, stale, parseErrors } = checkTierAConfig(h.hookFiles);
     const configWired = REQUIRED_EVENTS.every((e) => events[e].length > 0);
     const noneConfigured = REQUIRED_EVENTS.every((e) => events[e].length === 0);
 
@@ -359,7 +358,6 @@ for (const h of HARNESSES) {
 
     const rawSecretProbe = probeSecretBlock(events.PreToolUse);
     const rawSessionProbe = probeSessionContext(events.SessionStart);
-    const rawTurnProbe = probeTurnContext(events.UserPromptSubmit);
     const matcherOk = events.PreToolUse.length === 0 || events.PreToolUse.some((e) => matcherCoversRead(e.matcher));
 
     const state = classify({
@@ -368,7 +366,6 @@ for (const h of HARNESSES) {
       matcherOk,
       secretProbeOk: rawSecretProbe,
       sessionProbeOk: rawSessionProbe,
-      turnProbeOk: rawTurnProbe,
       secretEnabled,
       anyGuardrailEnabled,
     });
@@ -396,11 +393,25 @@ for (const h of HARNESSES) {
       }
       if (!noneConfigured) {
         console.log(
-          `    live probe — ${probeLine('secret-file block', rawSecretProbe, !secretEnabled)}, ${probeLine('session context', rawSessionProbe, !anyGuardrailEnabled)}, ${probeLine('UserPromptSubmit hook', rawTurnProbe, false)}`,
+          `    live probe — ${probeLine('secret-file block', rawSecretProbe, !secretEnabled)}, ${probeLine('session context', rawSessionProbe, !anyGuardrailEnabled)}`,
         );
       }
       for (const err of parseErrors) console.log(`    ${red(err)}`);
       if (noneConfigured) console.log(`    ${dim(h.wiring)}`);
+    }
+
+    // A machine wired by the previous commit can still carry this kit's
+    // UserPromptSubmit entry. Neither silently ignored (that hides real
+    // machine state) nor an error (the entry is inert — guard.mjs still
+    // handles the event and phase 'turn' injects nothing) — reported once,
+    // informationally, regardless of the state above. dev-unlink.sh removes
+    // it; dev-link.sh will not re-add it.
+    for (const event of STALE_EVENTS) {
+      if (stale[event].length > 0) {
+        console.log(
+          `    ${yellow(`note: stale ${event} entry for this kit — harmless leftover from an earlier version, not re-added; remove with: dev-unlink.sh --apply`)}`,
+        );
+      }
     }
   } else {
     const isWired = h.wired();

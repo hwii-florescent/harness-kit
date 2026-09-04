@@ -291,28 +291,23 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" SessionStart \
      hooks: [{ type: "command", command: $cmd, timeout: 10 }]
    }])'
 
-# UserPromptSubmit has no tool to dispatch on, so — like Codex's PreToolUse
-# entry above — the template simply never references $matcher; jq's --arg
-# still passes it (wire_tier_a's jq call reads the script-global $MATCHER for
-# every entry, regardless of event) but an unused --arg is a no-op to jq.
-# This is defect #1: guard.mjs has handled UserPromptSubmit
-# and emitted additionalContext since it was written, but nothing ever
-# invoked it because no hook was registered for the event. That is the
-# mitigation ARCHITECTURE.md §11 describes for agents pre-empting the
-# guardrails — it has never actually run on Claude Code until this entry.
-# Still wired even though context.mjs's session/turn split currently gives it
-# nothing to say on any given turn (see context.mjs's header) — removing the
-# hook outright rather than leaving it a deliberately quiet no-op is a call
-# for whoever owns this design next, not one made here.
-wire_tier_a claude "Claude Code" claude "$HOME/.claude/settings.json" UserPromptSubmit \
-  '.hooks[$event] = ((.hooks[$event] // []) + [{
-     hooks: [{ type: "command", command: $cmd, timeout: 10, statusMessage: "Checking harness-kit guardrails" }]
-   }])'
-
-wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" UserPromptSubmit \
-  '.hooks[$event] = ((.hooks[$event] // []) + [{
-     hooks: [{ type: "command", command: $cmd, timeout: 10 }]
-   }])'
+# UserPromptSubmit is deliberately NOT wired. A previous version of this
+# script wired it (defect #1: guard.mjs had handled the event and emitted
+# additionalContext since it was written, but nothing ever invoked it because
+# no hook was registered) — but context.mjs's session/turn split (see its
+# header) means phase 'turn' always returns '' today, so that wiring spawned
+# a node process on every single turn whose only correct output is silence.
+# A hook that can only ever produce nothing is indistinguishable from a
+# broken one, which is exactly the silent-absence failure this repo exists to
+# catch. This does NOT reopen defect #1: context injection is still closed,
+# via the SessionStart wiring above — only the delivery event for the
+# invariant paragraph changed, from every-turn to once-per-session.
+#
+# guard.mjs still handles UserPromptSubmit if it ever arrives — a hand-wired
+# hook, or a machine still carrying the previous commit's entry (doctor.mjs
+# reports that case; dev-unlink.sh cleans it up). Re-wiring it here, if a
+# genuinely per-turn signal ever earns its cost, is one more wire_tier_a call
+# per harness, same as any other event — this function does not change.
 
 wire_tier_b pi  "Pi"  pi
 wire_tier_b omp "omp" omp

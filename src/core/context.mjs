@@ -25,9 +25,11 @@
  * it just makes the violation smaller. So `buildContext` called with phase
  * 'turn' returns '' today. That is a legitimate outcome under this
  * function's existing contract, not a bug — but it does mean the
- * UserPromptSubmit hook now has nothing to say on every single invocation it
+ * UserPromptSubmit hook has nothing to say on every single invocation it
  * fires. Whether that hook is still worth the process spawn is a design
- * question, not one this file resolves on its own.
+ * question this file doesn't resolve on its own — it was resolved in
+ * dev-link.sh, which no longer wires the event by default; see its comment
+ * for the reasoning. guard.mjs still handles UserPromptSubmit if it arrives.
  *
  * Kept deliberately small. Injected context is paid for on every turn it
  * fires on, so anything here must earn its tokens — state the agent cannot
