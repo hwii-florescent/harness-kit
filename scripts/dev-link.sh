@@ -273,9 +273,10 @@ wire_tier_a codex "Codex" codex "$HOME/.codex/hooks.json" PreToolUse \
    }])'
 
 # UserPromptSubmit has no tool to dispatch on, so — like Codex's PreToolUse
-# entry above — the template simply never references $matcher; wire_tier_a
-# still receives it (every call does, see its signature) but an unused --arg
-# is a no-op to jq. This is defect #1: guard.mjs has handled UserPromptSubmit
+# entry above — the template simply never references $matcher; jq's --arg
+# still passes it (wire_tier_a's jq call reads the script-global $MATCHER for
+# every entry, regardless of event) but an unused --arg is a no-op to jq.
+# This is defect #1: guard.mjs has handled UserPromptSubmit
 # and emitted additionalContext since it was written, but nothing ever
 # invoked it because no hook was registered for the event. That is the
 # mitigation ARCHITECTURE.md §11 describes for agents pre-empting the
