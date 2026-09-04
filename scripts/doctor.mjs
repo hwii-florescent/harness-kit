@@ -193,7 +193,11 @@ function checkTierAConfig(files) {
       events[event].push(...findWiredEntries(hooks[event]));
     }
     for (const event of STALE_EVENTS) {
-      stale[event].push(...findWiredEntries(hooks[event]));
+      // Which file, not just how many: the remediation differs per file
+      // (dev-unlink.sh only rewrites settings.json), so a note that cannot
+      // name the file cannot give correct advice.
+      const found = findWiredEntries(hooks[event]);
+      if (found.length > 0) stale[event].push({ file, count: found.length });
     }
   }
   return { events, stale, parseErrors };
@@ -400,16 +404,27 @@ for (const h of HARNESSES) {
       if (noneConfigured) console.log(`    ${dim(h.wiring)}`);
     }
 
-    // A machine wired by the previous commit can still carry this kit's
+    // A machine wired by an earlier version can still carry this kit's
     // UserPromptSubmit entry. Neither silently ignored (that hides real
     // machine state) nor an error (the entry is inert — guard.mjs still
     // handles the event and phase 'turn' injects nothing) — reported once,
-    // informationally, regardless of the state above. dev-unlink.sh removes
-    // it; dev-link.sh will not re-add it.
+    // informationally, regardless of the state above.
+    //
+    // The remediation is spelled out rather than reduced to one command
+    // because the obvious one is wrong twice over: `dev-unlink.sh --apply`
+    // removes EVERY entry naming this checkout, so following it leaves the
+    // guardrails off, and it only rewrites settings.json, so a stale entry in
+    // settings.local.json survives it and this note would nag forever. Cost
+    // of the entry is one node spawn per turn that prints nothing — worth
+    // clearing, not worth unwiring the kit to clear.
     for (const event of STALE_EVENTS) {
-      if (stale[event].length > 0) {
+      for (const { file, count } of stale[event]) {
+        const one = count === 1;
         console.log(
-          `    ${yellow(`note: stale ${event} entry for this kit — harmless leftover from an earlier version, not re-added; remove with: dev-unlink.sh --apply`)}`,
+          `    ${yellow(`note: ${count} stale ${event} ${one ? 'entry' : 'entries'} for this kit in ${file.replace(HOME, '~')}`)}`,
+        );
+        console.log(
+          `    ${dim(`      inert, and dev-link.sh will not re-add ${one ? 'it' : 'them'}. Delete ${one ? 'that entry' : 'those entries'} from the file; a full dev-unlink.sh --apply would unwire the kit too.`)}`,
         );
       }
     }

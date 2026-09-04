@@ -19,6 +19,7 @@ import { existsSync, readFileSync, rmSync, openSync, closeSync, mkdtempSync, con
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONTEXT_PHASE } from '../src/tier-a/events.mjs';
 
 import { CWD, CASES, everyHarness, claude, codex } from './payloads.mjs';
 
@@ -224,11 +225,33 @@ describe('tier A: event routing', () => {
     // candidate for genuinely per-turn content — the project/lockfile line —
     // was dropped rather than kept, because it failed context.mjs's own
     // "cheaply discoverable" bar. So today this event legitimately has
-    // nothing to say; pinned here so a future addition changes this test on
-    // purpose rather than by accident.
+    // nothing to say.
+    //
+    // This test canNOT tell that apart from the event being unhandled: the
+    // generic fall-through in guard.mjs produces the same exit 0 and the same
+    // empty stdout. It used to claim it pinned the mapping; it never did.
+    // The mapping is pinned by the CONTEXT_PHASE test below instead, and this
+    // one is left as an end-to-end check that the event stays silent.
     const r = run(claude('', {}, 'UserPromptSubmit'));
     assert.equal(r.code, ALLOW);
     assert.equal(r.stdout, '', 'nothing worth injecting every turn today — see context.mjs');
+  });
+
+  // The commit that stopped wiring UserPromptSubmit deliberately KEPT
+  // guard.mjs handling it, so a machine carrying an older entry, or anyone
+  // hand-wiring a real per-turn signal later, keeps allow-and-maybe-inject
+  // instead of the generic unhandled-event branch. That decision is invisible
+  // end-to-end today — both paths exit 0 with empty stdout — so it is pinned
+  // on the map itself. Without this, deleting UserPromptSubmit from
+  // CONTEXT_PHASE passes the whole suite.
+  test('CONTEXT_PHASE maps both context events, and nothing else', () => {
+    assert.deepEqual(
+      { ...CONTEXT_PHASE },
+      { SessionStart: 'session', UserPromptSubmit: 'turn' },
+    );
+    // PreToolUse must never be a context event — it is the one event that can
+    // block, and routing it here would skip checkTool entirely.
+    assert.equal('PreToolUse' in CONTEXT_PHASE, false);
   });
 
   test('ignores events it does not handle', () => {
