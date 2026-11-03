@@ -17,10 +17,13 @@
 
 import { readFileSync } from 'node:fs';
 import { checkTool, buildContext } from '../core/index.mjs';
-import { logCrash } from '../core/log.mjs';
+import { logCrash, logDecision } from '../core/log.mjs';
 
 const EXIT_ALLOW = 0;
 const EXIT_BLOCK = 2;
+const mode = process.argv.indexOf('--harness');
+const harness = ['claude', 'codex'].includes(process.argv[mode + 1]) && mode !== -1
+  ? process.argv[mode + 1] : 'tier-a';
 
 async function main() {
   let payload = {};
@@ -53,6 +56,7 @@ async function main() {
   if (event !== 'PreToolUse') return EXIT_ALLOW;
 
   const verdict = checkTool(payload);
+  logDecision(harness, verdict);
   if (verdict.blocked) {
     process.stderr.write(verdict.reason + '\n');
     return EXIT_BLOCK;

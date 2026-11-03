@@ -14,9 +14,10 @@ import { buildContext } from './context.mjs';
 import * as secret from './guardrails/secret.mjs';
 import * as heavyPath from './guardrails/heavy-path.mjs';
 import * as broadGlob from './guardrails/broad-glob.mjs';
+import * as fileTools from './guardrails/file-tools.mjs';
 
 /** Order matters: the most serious verdict should be the one the user sees. */
-const GUARDRAILS = [secret, heavyPath, broadGlob];
+const GUARDRAILS = [secret, heavyPath, broadGlob, fileTools];
 
 const ALLOW = Object.freeze({ blocked: false });
 
@@ -45,7 +46,12 @@ export function checkTool(payload, opts = {}) {
 
     for (const guardrail of GUARDRAILS) {
       const verdict = guardrail.check(call, config);
-      if (verdict?.blocked) return verdict;
+      if (verdict?.blocked) return {
+        ...verdict,
+        reason: verdict.reason + '\nUse the suggested alternative first. Only if it cannot accomplish ' +
+          "the task, ask the user for an explicit configuration exception. Do not change guardrail " +
+          "configuration without the user's permission. User approval alone does not bypass this hook.",
+      };
     }
     return ALLOW;
   } catch (error) {

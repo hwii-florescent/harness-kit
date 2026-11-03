@@ -46,6 +46,14 @@ describe('tier A: exit-code contract', () => {
     assert.equal(r.stdout, '', 'must not print JSON when blocking via exit code');
   });
 
+  test('shell writes hard-block even in Claude default permission mode', () => {
+    const r = run({ ...claude('Bash', CASES.shellWrite.input), permission_mode: 'default' });
+    assert.equal(r.code, BLOCK);
+    assert.equal(r.stdout, '', 'no automatic permissionDecision:ask');
+    assert.match(r.stderr, /native read tool/);
+    assert.match(r.stderr, /Do not change guardrail configuration without the user's permission/);
+  });
+
   test('allows with exit 0 and no output', () => {
     const r = run(claude('Read', { file_path: 'src/index.ts' }));
     assert.equal(r.code, ALLOW);

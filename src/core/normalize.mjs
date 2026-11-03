@@ -10,6 +10,8 @@
  *   Pi / omp     { toolName: "bash", input: {...} }            (+ ctx.cwd)
  */
 
+import path from 'node:path';
+
 /** Canonical tool kinds. Everything else normalises to `other`. */
 export const KIND = {
   SHELL: 'shell',
@@ -120,6 +122,11 @@ export function normalize(payload = {}, extra = {}) {
   const input = first(payload.tool_input, payload.toolInput, payload.input, payload.args) ?? {};
   const kind = TOOL_KINDS.get(rawTool.toLowerCase()) ?? KIND.OTHER;
 
+  const baseCwd = first(payload.cwd, extra.cwd, process.cwd());
+  // Codex exec_command supplies workdir; shell tools may supply cwd.
+  // Keep effective-directory handling here, never in an adapter.
+  const shellCwd = kind === KIND.SHELL ? first(input.workdir, input.cwd) : null;
+  const cwd = typeof shellCwd === 'string' ? path.resolve(baseCwd, shellCwd) : baseCwd;
   const command = first(input.command, input.cmd, input.script) ?? null;
   const pattern = first(input.pattern, input.glob, input.globPattern) ?? null;
 
@@ -161,7 +168,7 @@ export function normalize(payload = {}, extra = {}) {
     pattern: globPattern,
     searchPath,
     paths,
-    cwd: first(payload.cwd, extra.cwd, process.cwd()),
+    cwd,
     input,
   };
 }

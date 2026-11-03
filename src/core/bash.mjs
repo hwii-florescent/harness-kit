@@ -33,14 +33,25 @@ export function unwrapShellExecutor(command) {
 /**
  * Split on `&&`, `||`, `;`, `|` and newlines.
  *
- * A newline separates statements just as `;` does. It was once excluded to
- * protect heredoc bodies and multiline strings; `stripHeredocs` now removes
- * those before this runs, so treating a newline as an operator is safe — and
- * necessary, or a multi-line script is judged as one enormous command.
+ * Unquoted newlines separate statements just as `;` does; quoted newlines
+ * stay inside their word. Callers strip heredoc bodies before this runs.
  */
-export function splitCompound(command) {
+export function splitCompound(command, { keepOperators = false } = {}) {
   if (typeof command !== 'string') return [];
-  return command.split(/\s*(?:&&|\|\||[;|\n])\s*/).map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  let start = 0;
+  // Quoted/escaped operators and comments are data, not pipeline boundaries.
+  const syntax = /'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]|(?:^|(?<=[\s;|&]))#[^\n]*|(&&|\|\||[;|\n])/g;
+  for (const match of command.matchAll(syntax)) {
+    if (!match[1]) continue;
+    const sub = command.slice(start, match.index).trim();
+    if (sub) out.push(sub);
+    if (keepOperators) out.push(match[1]);
+    start = match.index + match[0].length;
+  }
+  const last = command.slice(start).trim();
+  if (last) out.push(last);
+  return out;
 }
 
 /**
@@ -74,10 +85,28 @@ export function isAllowedCommand(command) {
 /**
  * Reduce a command to the sub-commands that still need checking.
  * Returns [] when the whole command is allowlisted.
+ * boundedPipes is for context economy only, never for secret checks.
  */
-export function suspectSubCommands(command) {
-  const unwrapped = unwrapShellExecutor(stripHeredocs(command));
-  return splitCompound(unwrapped).filter((sub) => !isAllowedCommand(sub));
+export function suspectSubCommands(command, { boundedPipes = false } = {}) {
+  const parts = splitCompound(unwrapShellExecutor(stripHeredocs(command)), { keepOperators: true });
+  return parts.filter((sub, i) => {
+    if (/^(?:&&|\|\||[;|\n])$/.test(sub) || isAllowedCommand(sub)) return false;
+    if (!boundedPipes || parts[i + 1] !== '|' || !isBoundedPipeConsumer(parts[i + 2])) return true;
+    // An explicit stdout redirect can bypass the pipe. 2>&1 does not.
+    const syntax = sub.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]/g, '').replace(/\b2>&1\b/g, '');
+    return /[<>`]/.test(syntax);
+  });
+}
+
+function isBoundedPipeConsumer(command) {
+  const s = stripPrefix(command ?? '');
+  if (/^wc(?:\s+-[lwmcL]+)*\s*$/.test(s)) return true;
+  // ponytail: only direct stdout -> literal head/tail limits (200 lines/16 KiB)
+  // or wc are proven here. General pipelines/control flow need a shell AST.
+  const match = /^(?:head|tail)(?:\s+(?:-(\d+)|-n\s*(\d+)|--lines(?:=|\s+)(\d+)|-c\s*(\d+)|--bytes(?:=|\s+)(\d+)))?\s*$/.exec(s);
+  if (!match) return false;
+  const bytes = match[4] ?? match[5];
+  return Number(bytes ?? match[1] ?? match[2] ?? match[3] ?? 10) <= (bytes === undefined ? 200 : 16384);
 }
 
 /**
@@ -112,7 +141,20 @@ export function isBoundedRead(command, target, { listingRoot = false } = {}) {
 
   // `ls` floods only at the root of a generated tree. `ls node_modules` prints
   // a thousand entries; `ls node_modules/.bin/tsc` prints one.
-  if (/^ls\b/.test(s)) return !listingRoot;
+  if (/^ls\b/.test(s)) {
+    // Only known no-argument flags before operands/-- can prove -d. A value
+    // such as `ls -I -d node_modules` is an ignore pattern, not directory mode.
+    const flags = /^ls((?:\s+(?:-[aAbBcCdFfGghikLlmnopqRrSsUu1]+|--directory))*)(?:\s|$)/.exec(s)?.[1] ?? '';
+    const directoryOnly = /--directory\b|-[A-Za-z1]*d/.test(flags);
+    const recursive = /(?:^|\s)(?:-[A-Za-z]*R[A-Za-z]*|--recursive)(?:\s|$)/.test(s);
+    return !/[*?[\]{}]/.test(target) && (directoryOnly || (!listingRoot && !recursive));
+  }
+
+  // ponytail: one concrete installed-package manifest is treated as metadata,
+  // not size-checked. Use head for oversized manifests; add stat-based limits
+  // only if real manifests make this exemption expensive.
+  if (/^cat\b/.test(s) && !/[$`*?[\]{}]/.test(target)
+    && /(?:^|\/)node_modules\/.+\/package\.json$/.test(target)) return true;
 
   if (!BOUNDED_READ.test(s)) return false;
   if (RECURSIVE.test(s) && !looksLikeFile(target)) return false;
@@ -128,7 +170,8 @@ export function isBoundedRead(command, target, { listingRoot = false } = {}) {
  * The secret guardrail deliberately does not use this filter: copying a `.env`
  * somewhere is an exfiltration risk even though it prints nothing.
  */
-const CONTENT_READ = /^(cat|bat|less|more|head|tail|ls|ll|la|dir|tree|find|fd|grep|rg|ag|ack|awk|sed|wc|od|xxd|strings|jq|yq|diff|open|code|nl|tac|column|sort|uniq)\b/;
+// GUI launchers open/code do not print the files they launch.
+const CONTENT_READ = /^(cat|bat|less|more|head|tail|ls|ll|la|dir|tree|find|fd|grep|rg|ag|ack|awk|sed|wc|od|xxd|strings|jq|yq|diff|nl|tac|column|sort|uniq)\b/;
 
 export function isContentReadCommand(command) {
   return CONTENT_READ.test(stripPrefix(command));
@@ -150,6 +193,12 @@ const GREP_FLAGS = new Set([
   '--include', '--exclude', '--exclude-dir',
   '-m', '--max-count', '-A', '-B', '-C', '--context',
 ]);
+
+const LS_FLAGS = new Set([
+  '-I', '--ignore', '--hide', '--block-size', '--format', '--sort', '--time',
+  '--time-style', '--color', '--quoting-style', '--tabsize', '--width', '-w', '-T', '-D',
+]);
+const DIFF_FLAGS = new Set(['-x', '--exclude', '-X', '--exclude-from']);
 
 const FIND_FLAGS = new Set([
   '-name', '-iname', '-path', '-ipath', '-regex', '-iregex',
@@ -175,6 +224,8 @@ const PATTERN_FLAGS = new Set(['-e', '--regexp', '-f', '--file']);
 function valueFlagsFor(head) {
   if (PATTERN_FIRST.test(head)) return GREP_FLAGS;
   if (/^find\b/.test(head)) return FIND_FLAGS;
+  if (/^ls\b/.test(head)) return LS_FLAGS;
+  if (/^diff\b/.test(head)) return DIFF_FLAGS;
   return MESSAGE_FLAGS;
 }
 

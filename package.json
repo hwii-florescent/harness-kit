@@ -17,7 +17,8 @@
     "test": "node --test test/*.test.mjs",
     "doctor": "node scripts/doctor.mjs",
     "guard": "node src/tier-a/guard.mjs",
-    "replay": "node scripts/replay.mjs"
+    "replay": "node scripts/replay.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "pi": {
     "extensions": [

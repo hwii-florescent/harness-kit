@@ -27,6 +27,8 @@ describe('cross-harness parity', () => {
     ['readSafeExample', false, null],
     ['listHeavyDir', true, 'heavyPath'],
     ['buildCommand', false, null],
+    ['shellWrite', true, 'fileTools'],
+    ['scratchWrite', false, null],
     ['broadGlob', true, 'broadGlob'],
     ['scopedGlob', false, null],
   ];

@@ -11,7 +11,7 @@
  */
 
 import { checkTool, buildContext } from '../core/index.mjs';
-import { logCrash } from '../core/log.mjs';
+import { logCrash, logDecision } from '../core/log.mjs';
 
 /**
  * @param {object} pi     ExtensionAPI, from Pi or omp.
@@ -26,6 +26,7 @@ export function install(pi, { harness = 'pi' } = {}) {
         { toolName: event.toolName, input: event.input },
         { cwd: ctx?.cwd },
       );
+      logDecision(harness, verdict);
       if (verdict.blocked) return { block: true, reason: verdict.reason };
     } catch (error) {
       logCrash(`tier-b/${harness}/tool_call`, error, { tool: event?.toolName });

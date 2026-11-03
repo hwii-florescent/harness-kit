@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { decisionCounts, logDir } from '../src/core/log.mjs';
 
 const KIT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = os.homedir();
@@ -127,4 +128,16 @@ if (fs.existsSync(crashLog)) {
   console.log(`  ${green('no crashes logged')}`);
 }
 
+const counts = decisionCounts();
+console.log(`\n  Decision observations (retained local buckets in ${path.relative(KIT, logDir()) || '.'}):`);
+if (!counts.size) console.log('    none yet — registration is not proof of live interception.');
+for (const harness of [...new Set([...counts.keys()].map((key) => key.split('/')[0]))].sort()) {
+  const rows = [...counts].filter(([key]) => key.startsWith(harness + '/'));
+  const allowed = counts.get(`${harness}/none`) ?? 0;
+  const blocked = rows.filter(([key]) => !key.endsWith('/none')).reduce((sum, [, n]) => sum + n, 0);
+  const total = allowed + blocked;
+  const rules = rows.filter(([key]) => !key.endsWith('/none')).map(([key, n]) => `${key.split('/')[1]}=${n}`).join(', ');
+  console.log(`    ${harness.padEnd(13)} ${total} decisions, ${blocked} blocked (${(blocked / total * 100).toFixed(2)}%)${rules ? ' — ' + rules : ''}`);
+}
+console.log(dim('    Intervention rate, NOT a false-positive rate. 14-day retention, 1 MiB/day cap; IO failures can undercount.'));
 console.log();

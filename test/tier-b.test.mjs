@@ -8,6 +8,7 @@
  */
 
 process.env.HK_NO_GLOBAL_CONFIG = '1';
+process.env.HK_NO_DECISION_LOG = '1';
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,6 +67,16 @@ for (const [name, extension] of [['pi', piExtension], ['omp', ompExtension]]) {
       assert.equal(api.emit('tool_call', piPayload('bash', { command: 'ls node_modules' }))?.block, true);
     });
 
+    test('hard-blocks shell writes even with UI, without opening a dialog', () => {
+      const api = mount(extension);
+      const ctx = { cwd: '/harness-kit-non-scratch-fixture', hasUI: true,
+        ui: { confirm() { assert.fail('must not open an automatic approval dialog'); } } };
+      const result = api.emit('tool_call', piPayload('bash', { command: 'echo x > src/a.ts' }), ctx);
+      assert.equal(result?.block, true);
+      assert.match(result.reason, /native read tool/);
+      assert.match(result.reason, /Only if it cannot accomplish the task, ask the user/);
+    });
+
     test('does not block the build', () => {
       const api = mount(extension);
       assert.equal(api.emit('tool_call', piPayload('bash', { command: 'npm run build' })), undefined);
@@ -95,10 +106,11 @@ for (const [name, extension] of [['pi', piExtension], ['omp', ompExtension]]) {
 }
 
 describe('tier B: matches tier A', () => {
-  // Same six canonical cases as the core suite, through the extension surface.
+  // Same canonical cases as the core suite, through the extension surface.
   const expectations = {
     readSecret: true, readSafeExample: false,
     listHeavyDir: true, buildCommand: false,
+    shellWrite: true, scratchWrite: false,
     broadGlob: true, scopedGlob: false,
   };
 

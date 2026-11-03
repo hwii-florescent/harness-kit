@@ -37,6 +37,9 @@ export const DEFAULTS = {
     broadGlob: {
       enabled: true,
     },
+    fileTools: {
+      enabled: true,
+    },
   },
 };
 
@@ -93,7 +96,7 @@ function sanitizeConfig(value) {
   }
 
   const guardrails = { ...value.guardrails };
-  for (const name of ['secret', 'heavyPath', 'broadGlob']) {
+  for (const name of ['secret', 'heavyPath', 'broadGlob', 'fileTools']) {
     if (!Object.hasOwn(guardrails, name)) continue;
     const sanitized = sanitizeGuardrail(name, guardrails[name]);
     if (sanitized === null) delete guardrails[name];

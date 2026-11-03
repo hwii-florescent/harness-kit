@@ -10,24 +10,39 @@ have already cost time. Then [SCOPE.md](./SCOPE.md) for phasing and
 [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ```bash
-npm test              # 225 core tests; 274 on the assembled stack
-npm run replay        # false-positive rate against real agent history
-npm run doctor        # which harnesses are installed / wired
+npm test              # hermetic core, adapter and metrics tests
+npm run replay        # would-block rate against recorded agent history
+npm run doctor        # registration + retained decision counts
+npm run smoke -- codex pi omp  # LIVE, billable; cheap Luna models
+npm run smoke -- claude        # LIVE, billable; Haiku, $0.15 session cap
+npm run smoke -- --file-tools codex pi omp # also tests shell-write block + scratch write
+npm run smoke -- --heavy-bounds claude codex pi omp # metadata + bounded listings must run
 ```
 
 ## What it does
 
-Three guardrails share one core decision on Claude Code, Codex, Pi and omp:
+Four guardrails share one core decision on Claude Code, Codex, Pi and omp:
 
 | Guardrail | Blocks | Why |
 |---|---|---|
 | `secret` | `.env`, `*.pem`, `id_rsa`, `credentials.json`, … | Stops credentials entering model context |
 | `heavyPath` | reads inside `node_modules`, `dist`, `.git`, … | Stops generated files flooding the context window |
 | `broadGlob` | `**/*.ts` at the project root | Same, for discovery tools |
+| `fileTools` | Common direct shell/interpreter writes to non-scratch files | Keeps edits on native file tools |
 
 Each guardrail is configurable and individually disablable. Core failures fail
-open; a correct block can be declined through a supported interactive adapter or
-persistently exempted in configuration.
+open; a block can be persistently exempted in configuration. These are path and
+command heuristics, not an actual file-size limit.
+
+`heavyPath` allows directory-only metadata (`ls -ld node_modules`), a concrete
+dependency `package.json` (including parent-relative paths), and GUI launchers
+(`open build/App.app`, `code dist/bundle.js`). Direct pipes into literal
+`head`/`tail` limits up to 200 lines or 16 KiB, or a `wc` summary, also pass.
+These pipeline exemptions do not apply to secrets. Quoted/commented pipes,
+`||`, negative/variable/oversized limits, and stdout redirected around the pipe
+are not accepted as bounds; later commands are still checked independently.
+Wildcard and recursive listings remain conservative. A named manifest is
+treated as metadata without a byte-size check, not as a universal size guarantee.
 
 ## How one core serves four harnesses
 
@@ -46,20 +61,19 @@ The harnesses fall into two integration tiers, so there are two adapters, not fo
 `checkTool()` returns the same global verdict for every raw payload dialect.
 Adapters translate that verdict:
 
-- Claude Code's interactive/default `PreToolUse` path returns
-  `permissionDecision: "ask"` so Claude owns the one-call prompt. Its
-  `dontAsk` and `bypassPermissions` modes stay on exit 2 + stderr.
-- Codex stays on exit 2 + stderr; its installed runtime rejects
-  `permissionDecision: "ask"`.
-- Pi and omp await one `ctx.ui.confirm()` only when `ctx.hasUI === true`.
-  Approval allows that exact call once; a non-`true` result or no UI returns
-  `{block:true, reason}`. A confirmation exception fails open. No approval
-  persists.
+- Claude Code and Codex return exit 2 + stderr for a block.
+- Pi and omp return `{block:true, reason}` for a block.
 
-Claude's separate `PermissionRequest` event is documented but unused; the kit
-uses the `PreToolUse` `ask` response instead. Registration and structural
-inspection are not proof that an extension loaded, so use the live block/pass
-smoke for that claim.
+**No automatic approval dialogs**, even in interactive sessions. A block tells
+the agent to use the suggested alternative first. Only if that cannot accomplish
+the task should it ask the user for an explicit configuration exception. The
+agent must not change guardrail settings without authorization; a conversational
+"yes" or an `approved` field does not itself bypass the hook. Exceptions are
+configuration changes, not exact-call approval tokens: preserve unrelated
+settings and restore the previous configuration when finished.
+
+Older design documents describe automatic prompts, not the current policy.
+Registration is not proof that a hook loaded: use the live smoke for that claim.
 
 Allowed process calls remain exit 0 with no output. Context injection still uses
 the shared JSON `additionalContext` shape.
@@ -68,11 +82,11 @@ the shared JSON `additionalContext` shape.
 
 ```
 src/core/            checkTool, config, normalisation, bash analysis
-  guardrails/        secret · heavy-path · broad-glob
+  guardrails/        secret · heavy-path · broad-glob · file-tools
 src/tier-a/guard.mjs Claude Code + Codex
 src/tier-b/          shared.mjs + pi.mjs + omp.mjs
-test/                225 core tests; 274 on the assembled stack
-scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
+test/                core, adapter and telemetry regression checks
+scripts/             doctor.mjs · replay.mjs · smoke.mjs · dev-link.sh
 ```
 
 ## Testing approach
@@ -81,10 +95,10 @@ scripts/             doctor.mjs · replay.mjs (read-only) · dev-link.sh
 The core parity suite asserts not only that each verdict is correct but that the
 four are **identical to one another** — the kit's central claim.
 
-Tier A is tested by spawning `guard.mjs` with explicit Claude and Codex modes and
-asserting on the process contract. Tier B is tested through an async fake
-`ExtensionAPI` shaped like Pi's, including approval, denial, no-UI, and
-fail-open confirmation cases.
+Tier A is tested by spawning `guard.mjs` and asserting its exit-code contract.
+Tier B uses a fake `ExtensionAPI` to check block/pass returns and context
+injection. Metrics tests cover data minimization, retention, caps, labels and
+failure isolation.
 
 A dedicated false-positive suite protects the Phase 0 replay target:
 `git commit -m "fix .env loading"`, `rm -rf dist`, `./node_modules/.bin/eslint
@@ -93,9 +107,8 @@ src` and friends must all pass through.
 ### Replay: the test that unit tests cannot be
 
 `npm run replay` walks recorded agent transcripts and feeds every tool call to
-`checkTool()`. Those calls actually ran and were overwhelmingly legitimate, so
-the blocked fraction is an empirical false-positive rate — the Phase 0 exit
-criterion, measured in seconds rather than a fortnight.
+`checkTool()`. The blocked fraction is a would-block rate, not a measured
+false-positive rate: each blocked call still needs review.
 
 It earns its place. The first run over 3,600 real calls returned **3.99%**: one
 in twenty-five legitimate commands blocked. `extractPaths` was treating every
@@ -104,11 +117,18 @@ named `build`, and `grep -vE "node_modules|dist/"` was blocked for naming the
 very things it excludes. No hand-written case would have found that — you have
 to already suspect the collision to write the test.
 
-The latest recorded run covered **4,248 calls**, of which **3,993 were in
-scope** and **34 were blocked (0.85%)**. The remaining blocks are the guardrail
-working: `cat .npmrc`, `ls node_modules`, `find dist -type f`. Run it after any
-change to `bash.mjs` or a guardrail, and read the remaining blocks rather than
-watching the number — each one should be a block you would defend.
+The 2026-11-02 pre-merge baseline covered **7,110 tool-call records**, **6,872
+in scope**, and **19 would-block decisions (0.28%)**, all `heavyPath`. Enabling
+`fileTools` adds **401**, for **420 (6.11%)** total. Most new matches are direct
+shell/interpreter edits; unresolved scratch-variable writes and workspace log
+redirects also block. This is an expanded policy, not a regression in the three
+older rules or a measured false-positive rate. The corpus includes repeated
+records, missing historical scratch directories, and no Glob/Grep/MultiEdit/
+NotebookEdit. After the bounded-read cleanup, the same corpus reports **407
+(5.92%)**: **5 heavyPath**, **402 fileTools**. Of the 19 old heavy-path blocks,
+13 now pass and one exposes an existing file-tools block on an unresolved write.
+The remaining five are listings/recursive diffs without a proven bound. Review
+the actual commands, not just the percentage.
 
 `test/extraction.test.mjs` pins the classes replay uncovered so they cannot
 come back.
@@ -145,9 +165,20 @@ were a read of a `build` directory. Only running a real agent with a native
 grep tool found it. Replay now lists the in-scope tools a corpus never
 exercised, so the gap is visible rather than assumed.
 
-Everything is hermetic: `HK_NO_GLOBAL_CONFIG=1` stops the config loader reading
-`~`, and crash logs are redirected under `test/`. The suite writes nothing
-outside this repo.
+Unit tests isolate global configuration and telemetry; temporary metrics
+fixtures are removed after each check. Live smoke is opt-in and uses the real
+installed wiring/authentication, not fake adapters. It creates synthetic files
+in a temporary directory and requires a real source-search result plus secret
+and heavy-directory hook errors. A model refusal or quota error is a failure,
+not a successful block. Raw traces stay in the printed temporary directory.
+`--file-tools` adds an actual shell-write denial, verifies the workspace file was
+not created, and requires a successful scratch-file write. Its temporary project
+is created under the user's home, outside scratch roots; Codex uses its normal
+workspace-write sandbox for this check, not a sandbox bypass.
+`--heavy-bounds` additionally requires actual successful output from directory
+metadata, a capped listing, and a parent-relative dependency manifest read.
+Both flags can be combined; all eight checks passed on all four installed
+harnesses using Haiku/Luna in the 2026-11-02 bounded-read cleanup.
 
 ## Configuration
 
@@ -158,7 +189,8 @@ outside this repo.
   "guardrails": {
     "secret":    { "enabled": true, "allow": ["fixtures/*"] },
     "heavyPath": { "enabled": true, "allow": ["vendor"] },
-    "broadGlob": { "enabled": true }
+    "broadGlob": { "enabled": true },
+    "fileTools": { "enabled": true }
   }
 }
 ```
@@ -166,8 +198,29 @@ outside this repo.
 Configuration is read afresh on every intercepted call, including in long-lived
 Pi and omp sessions. A malformed or missing layer contributes nothing and later
 layers still apply. Persistent exceptions use `allow` for `secret` and
-`heavyPath`, or `enabled:false` for `broadGlob`; interactive grants are
-one-call-only and are not written to disk.
+`heavyPath`, or `enabled:false` for `broadGlob` / `fileTools`.
+
+### Direct file edits
+
+`fileTools` replaces the standalone Pi `prefer-builtin-file-tools` extension;
+do not keep both active. It applies to normalized shell calls on all four
+harnesses, including Codex `cmd` / `workdir`. Native read/write/edit/apply_patch
+calls are unaffected by this rule (other rules still apply).
+
+It detects common redirects, tee/truncate/dd outputs, in-place sed/perl/ruby,
+and inline/heredoc Python/Node/Path writes. Literal scratch destinations under
+`/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` and `/dev` are
+exempt after resolving existing ancestors and symlinks; `$TMPDIR` is resolved
+and checked rather than trusted. Scratch roots are path-based, so a project
+itself under a scratch root also benefits from that exemption.
+
+Unknown variable destinations and complex control flow stay conservative.
+Build/test execution remains allowed, but a direct workspace log redirect such
+as `npm test > logs/test.log` blocks; redirect to a literal scratch file instead.
+This is a heuristic, not a sandbox: hidden script writes, eval, and unsupported
+shell syntax are not comprehensively analyzed. Read-only source text is scoped
+to its own command/interpreter, not confused with a neighboring write script.
+Run `node --test test/file-tools.test.mjs` for the focused regression check.
 
 ## Wiring it up
 
@@ -186,19 +239,15 @@ Then restart Claude Code and Codex; `/reload` in Pi and omp.
 Both scripts are dry-run unless given `--apply`, are idempotent, back up every
 file they edit, and accept `--only claude,pi` to wire a subset.
 
-Tier A writes canonical nested `hooks.PreToolUse` groups with exact commands:
+Tier A appends a nested `hooks.PreToolUse` handler. Existing legacy installations
+may include `--harness claude` or `--harness codex`; these label decision metrics
+(the verdict remains shared). Mode-less calls are counted as `tier-a`.
 
-```text
-node "<kit>/src/tier-a/guard.mjs" --harness claude
-node "<kit>/src/tier-a/guard.mjs" --harness codex
-```
-
-Reruns migrate the old mode-less command, wrong-harness mode, direct legacy
-entries, and duplicate harness-kit handlers without clobbering unrelated groups
-or handlers. `doctor` considers Tier A wired only when exactly one canonical
-nested handler has the expected harness-specific command. It asks Pi and omp
-whether the package is registered; the documented live block/pass smoke proves
-that the extension actually loaded and executes.
+The current installer checks for a checkout-path mention; it does **not** migrate
+stale paths or validate duplicate handlers. `doctor` likewise checks path mentions
+for Tier A and package registration for Tier B, not runtime execution. After
+moving the checkout, replace stale registrations rather than appending a second
+hook, and run the live smoke.
 
 Tier B registers through each agent's own package manager (`pi install`,
 `omp install`, or `omp plugin install`), which records the entry in its settings
@@ -216,13 +265,40 @@ echo '{"guardrails":{"heavyPath":{"enabled":false}}}' > ~/.harness-kit.json
 
 Use `guardrails.secret.allow` or `guardrails.heavyPath.allow` for persistent
 path exceptions, and disable the firing guardrail for a persistent broad-glob
-exception.
+or file-tools exception. Agents may do this only with explicit user permission;
+prefer a local exception and restore the previous configuration afterward.
+
+## Local decision counts
+
+`npm run doctor` aggregates `.local/decisions-YYYY-MM-DD.jsonl` (or `HK_LOG_DIR`).
+Each record contains only closed-enum `harness`, `outcome` and `guardrail` fields:
+no command, path, prompt, content, reason, identifier or exact timestamp.
+Adapters record actual interceptions; direct core calls and replay do not.
+These are intervention counts, not false-positive counts, and include live smoke
+traffic. `fileTools` decisions now use the normal harness label. Retained
+`pi-file-tools` observations come from the retired standalone Pi extension.
+
+Buckets retain 14 UTC days, capped at 1 MiB/day. Counts can under-report at that
+cap or on IO failure; telemetry failures never alter a decision. Set
+`HK_NO_DECISION_LOG=1` to opt out. Crash breadcrumbs are separate and retain
+their existing error/stack format; the strict schema applies to decision logs.
 
 ## Status against Phase 0
 
-Done: core, both adapters, three guardrails, context injection, tests, doctor,
+Done: core, both adapters, four guardrails, context injection, tests, doctor,
 replay, and local wiring support on all four harnesses.
 
-Remaining: the two-week dogfood — the actual gate into Phase 1 — plus one open
-technical item: **Codex has never been exercised live.** Its payloads here have
-only ever been synthetic. See SCOPE.md acceptance criterion 1.
+2026-11-02: repaired stale Claude/Pi paths and restored omp registration.
+Codex 0.166.0, Pi 1.4.0 and omp 18.15.0 passed the live source-search,
+secret-read block and heavy-directory block checks on `gpt-5.6-luna`.
+They also passed the shared file-tools block/scratch-write smoke. Pi's standalone
+extension and old local test were archived outside auto-discovery after a staged
+migration with rollback on failure; a fresh Pi process passed with only the
+shared rule. Existing Pi/omp sessions need `/reload`.
+Claude 2.1.316 initially hit the five-hour account quota before tools started;
+after the 16:50 EST reset it passed all five checks on pinned Haiku 4.5,
+low effort, with a $0.15 cap. The quota failure was not counted as a block.
+
+The two-week dogfood and a second dogfooder remain Phase 0 exit requirements.
+Older design/evidence documents contain September snapshots; this dated check
+supersedes their claim that Codex has never run live.

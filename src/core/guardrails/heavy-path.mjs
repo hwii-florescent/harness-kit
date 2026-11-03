@@ -130,7 +130,7 @@ export function check(call, config) {
   }
 
   if (call.kind === KIND.SHELL && call.command) {
-    for (const sub of suspectSubCommands(call.command)) {
+    for (const sub of suspectSubCommands(call.command, { boundedPipes: true })) {
       // Only reading floods the context. `rm -rf dist`, `mkdir dist`,
       // `cp x dist/` are routine and must stay out of the way.
       if (!isContentReadCommand(sub)) continue;

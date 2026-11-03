@@ -55,6 +55,14 @@ export const CASES = {
     claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
     input: { command: 'npm run build' },
   },
+  shellWrite: {
+    claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
+    input: { command: 'echo x > /harness-kit-non-scratch-fixture/src/a.ts' },
+  },
+  scratchWrite: {
+    claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
+    input: { command: 'echo x > /tmp/hk-guard-test.txt' },
+  },
   broadGlob: {
     claudeTool: 'Glob', codexTool: 'glob', piTool: 'glob',
     input: { pattern: '**/*.ts', path: '.' },

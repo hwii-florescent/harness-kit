@@ -14,6 +14,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { checkTool } from '../src/core/index.mjs';
+import { everyHarness } from './payloads.mjs';
 import {
   extractPaths, tokenize, stripHeredocs, splitCompound, isBoundedRead,
 } from '../src/core/bash.mjs';
@@ -100,6 +101,70 @@ describe('heavy paths: volume is the concern, not access', () => {
   test('isBoundedRead distinguishes listing a root from listing inside it', () => {
     assert.equal(isBoundedRead('ls node_modules', 'node_modules', { listingRoot: true }), false);
     assert.equal(isBoundedRead('ls node_modules/a/b.json', 'node_modules/a/b.json', {}), true);
+  });
+});
+
+describe('heavy paths: bounded output and metadata across harnesses', () => {
+  const allowCommands = [
+    'ls -ld node_modules', 'ls -d node_modules dist', 'ls -lad node_modules',
+    'ls --directory node_modules', 'ls -dR node_modules',
+    'ls node_modules | head -20', 'ls node_modules | head',
+    'ls node_modules 2>&1 | head -n 20', 'ls node_modules | head -n20',
+    'ls node_modules | head --lines=20', 'ls node_modules | head --lines 20',
+    'ls node_modules | head -c 100', 'ls node_modules | head --bytes=100',
+    'ls node_modules | tail -3', 'cat .git/info/exclude | tail -n 3',
+    'ls node_modules | wc -l', 'ls node_modules | wc',
+    'cat dist/bundle.js | head -20', 'find dist -type f | head -20',
+    'grep -rn "Props" node_modules/pkg | head -30',
+    'ls node_modules | head -20; git status --short',
+    'cat ../../node_modules/@xterm/addon-fit/package.json',
+    'cat node_modules/pkg/package.json | grep version',
+    'open build/App.app', 'code dist/bundle.js',
+    'diff -ru src copy -x __pycache__', 'diff -r --exclude node_modules src copy',
+    'diff -r --exclude=dist src copy',
+  ];
+  const blockCommands = [
+    'ls node_modules', 'ls -l node_modules', 'ls -R node_modules/pkg',
+    'ls -ld node_modules/*', 'ls -I -d node_modules', 'ls --ignore -d node_modules',
+    'ls -- -d node_modules', 'ls node_modules | cat', 'ls node_modules | grep .',
+    'ls node_modules || head -20', 'ls node_modules; head -20',
+    'ls node_modules | head -20; cat dist/bundle.js',
+    'ls node_modules | head -20 | cat dist/bundle.js',
+    'ls node_modules | head -n -20', 'ls node_modules | head --bytes=-10',
+    'ls node_modules | tail -n +3', 'ls node_modules | tail -f',
+    'ls node_modules | head -n "$LIMIT"', 'ls node_modules | head -n 1000000',
+    'ls node_modules | head -c 1000000',
+    'ls node_modules >&2 | head -20', 'ls node_modules 1>&2 | head -20',
+    'ls node_modules > /dev/stderr | head -20',
+    'ls node_modules # ignored | head -20', 'ls node_modules | echo "head -20"',
+    'ls node_modules | head -20 dist/other.js',
+    'cat dist/bundle.js "| head -20"',
+    'cat node_modules/*/package.json', 'cat node_modules/pkg/lib.js',
+    'cat dist/bundle.js', 'find dist -type f',
+    'open build/App.app; cat dist/bundle.js',
+    'diff -r src node_modules',
+  ];
+  for (const [commands, expected] of [[allowCommands, false], [blockCommands, true]]) {
+    for (const command of commands) {
+      test(`${expected ? 'blocks' : 'allows'} ${command}`, () => {
+        const results = everyHarness({ claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash', input: { command } })
+          .map(([, payload, opts]) => checkTool(payload, { ...opts, overrides: {} }));
+        assert.equal(results[0].blocked, expected, command);
+        if (expected) assert.equal(results[0].guardrail, 'heavyPath');
+        for (const result of results) assert.deepEqual(result, results[0]);
+      });
+    }
+  }
+  test('pipeline limits never exempt secret reads or shell writes', () => {
+    assert.equal(bash('cat .env | head -20').guardrail, 'secret');
+    assert.equal(bash('open .env').guardrail, 'secret');
+    assert.equal(bash('ls node_modules | head -20; echo x > /harness-kit-workspace/a.ts').guardrail, 'fileTools');
+  });
+  test('compound splitting preserves quoted separators and real operator identity', () => {
+    assert.deepEqual(splitCompound('grep "a|b;c" src && ls node_modules | head -20'),
+      ['grep "a|b;c" src', 'ls node_modules', 'head -20']);
+    assert.deepEqual(splitCompound('ls node_modules || head -20', { keepOperators: true }),
+      ['ls node_modules', '||', 'head -20']);
   });
 });
 

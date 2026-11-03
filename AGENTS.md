@@ -7,23 +7,24 @@ For design rationale see [ARCHITECTURE.md](./ARCHITECTURE.md); for phasing and
 what "done" means see [SCOPE.md](./SCOPE.md).
 For how strongly each claim here is actually backed — and which harness is
 still running on assumption — see [EVIDENCE.md](./EVIDENCE.md).
-For open problems not yet started — Codex approval and live verification, plus
-the shell-variable limit — see [BACKLOG.md](./BACKLOG.md).
+For limitations and historical investigations see [BACKLOG.md](./BACKLOG.md).
+The dated update in EVIDENCE.md supersedes older live-verification and approval notes.
 
 ---
 
 ## What this is
 
-One guardrail core running unmodified on four coding agents. Three guardrails
-(`secret`, `heavyPath`, `broadGlob`) intercept tool calls before they execute.
+One guardrail core running unmodified on four coding agents. Four guardrails
+(`secret`, `heavyPath`, `broadGlob`, `fileTools`) intercept tool calls before they execute.
 
 **Status: Phase 0.** Built, wired locally on the author's machine, not published.
 The remaining Phase 0 work is a two-week dogfood, not code.
 
 ```bash
-npm test        # 225 core tests; 274 on the assembled stack
-npm run replay  # false-positive rate against real agent history
-npm run doctor  # which harnesses are installed / wired
+npm test        # 360 hermetic regression tests
+npm run replay  # would-block rate, not a measured false-positive rate
+npm run doctor  # registration and retained intervention counts
+npm run smoke -- --file-tools --heavy-bounds claude codex pi omp # live, billable; Haiku/Luna
 ```
 
 ---
@@ -38,21 +39,23 @@ has practical consequences:
   are only writing test data**. `printf 'K=1' > .env` gets blocked.
 - Listing a `node_modules` root is blocked. Use a bounded read instead:
   `grep -c x path/to/file` or `ls path/to/specific/file`.
-- Heredoc bodies are stripped before analysis, so `python3 - <<'PY' … PY` and
-  `cat > f <<'EOF' … EOF` pass. Putting test fixtures in a heredoc-written file
-  is the clean way around the first problem.
+- The secret/heavy-path shell extractors strip heredoc bodies, but `fileTools`
+  inspects interpreter source and output redirects. Use native write/edit tools
+  for test fixtures rather than a shell heredoc into a workspace file. Literal
+  scratch destinations are exempt; unresolved variables remain conservative.
 - The persistent escape hatch is effective on the next tool call with no
   restart. Use `allow` for `secret`/`heavyPath`, or `enabled:false` for
-  `broadGlob`.
+  `broadGlob` / `fileTools`.
 
   ```bash
   echo '{"guardrails":{"secret":{"enabled":false}}}' > ~/.harness-kit.json
   ```
 
-  Remove the file when done — a disabled guardrail that nobody notices is the
-  failure this whole kit exists to avoid. Interactive Claude, Pi, and omp
-  approvals are exact-call and one-use; they are not persisted. Codex and
-  no-UI runs remain blocked.
+  This is a configuration exception, not a one-call token. Preserve unrelated
+  settings and restore the previous configuration when done. All adapters
+  hard-block, even with UI: no automatic approval dialogs. Use the suggested
+  alternative first; ask the user only if it cannot accomplish the task. Agents
+  must not change guardrail configuration without explicit user authorization.
 
 Fail-open covers crashes, not correct-but-wrong blocks. If a block is wrong,
 that is a bug worth fixing, not working around.
@@ -66,12 +69,10 @@ that is a bug worth fixing, not working around.
 2. **Adapters do not normalise.** They pass the raw payload through;
    `normalize.mjs` owns every dialect. Normalisation in two places drifts, and
    the drift is silent.
-3. **Adapter translations are explicit.** Claude's interactive/default
-   `PreToolUse` block returns `permissionDecision:"ask"`; Claude
-   `dontAsk`/`bypassPermissions` and Codex return exit 2 + stderr; Pi and omp
-   return `{block:true,reason}` after a non-`true` result or without UI, while
-   confirmation exceptions fail open. Never send `permissionDecision:"ask"` to
-   Codex.
+3. **Adapter translations are explicit.** Claude and Codex return exit 2 +
+   stderr; Pi and omp return `{block:true,reason}`. No adapter opens an approval
+   dialog. An agent may ask the user for a necessary configuration exception,
+   but conversational approval does not itself bypass a block.
 4. **Everything fails open.** Any internal error allows the call and appends to
    `<kit>/.local/crash.jsonl`.
 5. **`secret` and `heavyPath` use different extraction on purpose.** Do not
@@ -154,7 +155,7 @@ Run all of these after touching `bash.mjs` or any guardrail. Unit tests alone
 have missed every serious defect found so far.
 
 ```bash
-npm test                        # 225 core tests; 274 on the assembled stack
+npm test                        # 360 hermetic regression tests
 npm run replay -- --verbose     # rate + the actual remaining blocks
 node scripts/doctor.mjs         # wiring honest?
 ```
@@ -180,12 +181,12 @@ be one you would defend: `cat .npmrc`, `ls node_modules`, `find dist -type f`.
 src/core/index.mjs         checkTool() — the single entry point
 src/core/normalize.mjs     four payload dialects → one shape; patch-body parsing
 src/core/bash.mjs          shell analysis — largest file, most of the difficulty
-src/core/guardrails/       secret · heavy-path · broad-glob
-src/tier-a/guard.mjs       Claude Code + Codex (mode-aware stdin → output/exit 0|2)
+src/core/guardrails/       secret · heavy-path · broad-glob · file-tools
+src/tier-a/guard.mjs       Claude Code + Codex (stdin → output/exit 0|2)
 src/tier-b/shared.mjs      Pi + omp (pi.mjs / omp.mjs are thin re-exports)
 test/tool-shapes.test.mjs  real captured payloads per harness
 test/extraction.test.mjs   regressions found by replaying real history
-scripts/replay.mjs         the false-positive measurement
+scripts/replay.mjs         would-block measurement; review the actual calls
 scripts/dev-link.sh        wire all four; dry-run unless --apply
 ```
 
@@ -200,14 +201,20 @@ immediately.
 
 Phase 0's remaining work, in order:
 
-1. **Verify Codex live.** It is the one harness whose payloads have only ever
-   been synthetic here. Acceptance criterion 1 in SCOPE.md is not closed.
+1. **Keep live verification reproducible.** All four passed the expanded smoke
+   on 2026-11-02; rerun it after adapter or wiring changes, using cheap models.
 2. **Dogfood for two weeks.** Watch for a block you would argue with.
 3. **Find a second dogfooder.** The exit criteria require more than one person.
 
 Do not start Phase 1 (publishing) until the SCOPE.md exit criteria are met.
 
-Current numbers, for comparison after a change: 225 core tests / 274 assembled,
-replay 34/3,993 in-scope calls (0.85%). A prior red-team run covered 39 vectors;
-three deliberate shell-evasion cases remain outside the threat model of a
-well-meaning agent.
+Current numbers: 360 tests; replay 407/6,872 in-scope calls (5.92%): 402
+fileTools matches plus 5 heavyPath matches. Bounded-read cleanup reduced heavyPath
+from 19: 13 calls now pass and one reaches an existing fileTools block. Direct
+head/tail pipeline exemptions require literal limits <=200 lines/16 KiB; wc
+summaries, directory-only ls, and concrete dependency manifests also pass. This
+is not a measured false-positive rate; review conservative scratch-variable and
+workspace log-redirect blocks. File-tools scratch roots are path-based (including
+projects under /tmp); hidden script writes and unsupported shell syntax remain
+heuristic limits, not a sandbox. A prior red-team run covered 39 vectors; three
+deliberate shell-evasion cases remain outside the well-meaning-agent threat model.

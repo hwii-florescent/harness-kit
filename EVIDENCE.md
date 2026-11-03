@@ -8,6 +8,67 @@ Read alongside [AGENTS.md](./AGENTS.md) (traps) and [SCOPE.md](./SCOPE.md)
 
 ---
 
+## Current verification — 2026-11-02
+
+This dated update supersedes the historical approval and Codex-live claims below.
+
+- `npm test`: **360 passing**, including 63 additional bounded-output/metadata regressions. Shared file-tools cases exercise Claude, Codex,
+  Pi and omp payload dialects, effective shell cwd, scratch/mixed destinations,
+  symlink/traversal escapes, interpreter/heredoc scoping and live configuration.
+  Adapter tests explicitly prohibit automatic approval dialogs, including when
+  Pi/omp report UI availability and Claude reports default permission mode.
+- `npm run smoke -- --file-tools codex pi omp`: Codex **0.166.0** and omp
+  **18.15.0** passed on pinned cheap Luna models. Pi's first run was correctly
+  rejected as shared-rule evidence because the standalone extension intercepted
+  the file write first. Raw traces: `$HOME/hk-live-smoke-wBs8q5/`.
+- After archiving the standalone Pi extension/test with rollback on failure,
+  `npm run smoke -- --file-tools pi` passed on Pi **1.4.0** using only the shared
+  rule. Trace: `$HOME/hk-live-smoke-3BiWiO/pi.json`. Archived files:
+  `~/.harness-kit-backups/20261102164828-file-tools-merge/`.
+- `npm run smoke -- --file-tools claude`: Claude **2.1.316** passed after the
+  16:50 EST account reset on **claude-haiku-4-5-20251001**, low effort, **$0.15**
+  cap. Trace: `$HOME/hk-live-smoke-1kzCnF/claude.json`. The earlier HTTP 429 /
+  five-hour-limit failure happened before tools and was not a successful block.
+- All four successes require actual source-search output, secret/heavy-path hook
+  errors, the shared file-tools hook error, no workspace file created and a
+  successful scratch-file write. `scripts/smoke.mjs` checks tool/router output
+  and filesystem effects, not the model's summary. No extension shim, hook-trust
+  bypass or expensive model fallback was used. Codex's file-write check uses its
+  ordinary workspace-write sandbox; the base smoke retains read-only mode.
+- Bounded-read cleanup: `npm run smoke -- --heavy-bounds --file-tools claude codex pi omp`
+  passed on **all four** with the same pinned Haiku/Luna settings. In addition to
+  the five original checks, actual tool output proves `ls -ld node_modules`,
+  `ls node_modules | head -20`, and a parent-relative dependency manifest read
+  succeed. Raw traces: `$HOME/hk-live-smoke-qrlAxJ/`. GUI launchers were classified
+  in unit tests only; no generated app was launched during live smoke.
+- `node scripts/doctor.mjs`: **4 installed / 4 wired** (registration only).
+  The single September regex crash breadcrumb is unchanged.
+- The earlier file-tools LSP probe had six files confirmed clean and four
+  inconclusive. The bounded-read cleanup's final four-file probe confirms three
+  clean; the fourth has an existing Semgrep warning on dynamic glob RegExp
+  construction (`heavy-path.mjs:30`, unchanged). No new errors were reported.
+  `git diff --check` and JavaScript syntax checks passed.
+- Replay: **420 / 6,872 (6.11%)** would block, versus **19 / 6,872 (0.28%)**
+  before the file-tools merge. The extra **401** are the expanded shell-write
+  policy, including conservative unresolved scratch destinations and workspace
+  log redirects. The subsequent bounded-read cleanup yields **407 / 6,872
+  (5.92%)**, **5 heavyPath / 402 fileTools**. Of the former 19 heavy-path matches,
+  13 now pass and one reaches an existing unresolved-write file-tools block.
+  The five remaining heavy-path matches have no proven output bound (plain,
+  wildcard or filtered listings, and a recursive diff). The file-tools and
+  secret rule implementations were not changed by this cleanup. This is not a
+  measured false-positive rate; missing historical directories and repeated
+  records also limit the corpus. Glob/Grep/MultiEdit/NotebookEdit remain absent.
+
+Current policy: all adapters hard-block without automatic dialogs. Agents should
+use the suggested alternative, asking the user only for a necessary configuration
+exception. Configuration changes need explicit user authorization and restoration
+afterward; conversational approval is not a bypass or a one-use token. The shared
+file-tools classifier is a heuristic, not a sandbox. Existing Pi/omp sessions need
+`/reload`; the standalone Pi extension must not remain in auto-discovery.
+
+## Historical snapshots (superseded where noted above)
+
 ## The failure mode
 
 **Assuming a shape instead of capturing it**, and then documenting the
