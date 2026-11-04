@@ -111,6 +111,7 @@ describe('tier B: matches tier A', () => {
     readSecret: true, readSafeExample: false,
     listHeavyDir: true, buildCommand: false,
     shellWrite: true, scratchWrite: false,
+    shellRead: true, scratchRead: false,
     broadGlob: true, scopedGlob: false,
   };
 

@@ -67,7 +67,7 @@ describe('quoting and heredocs', () => {
 
   test('heredoc bodies carry programs, not operands', () => {
     assert.equal(stripHeredocs("python3 - <<'PY'\nx = 'build'\nPY\n").includes('build'), false);
-    allowed("python3 - <<'PY'\ns = open('docs/x.md').read()\nPY");
+    assert.equal(bash("python3 - <<'PY'\ns = open('docs/x.md').read()\nPY").guardrail, 'fileTools');
   });
 
   test('newlines separate statements the way `;` does', () => {
@@ -86,7 +86,7 @@ describe('heavy paths: volume is the concern, not access', () => {
   test('bounded reads of one named file are ordinary work', () => {
     allowed('ls node_modules/ws/package.json');
     allowed('ls -l target/release/app-core');
-    allowed('sed -n "3360,3520p" node_modules/x/dist/styles/x.css');
+    assert.equal(bash('sed -n "3360,3520p" node_modules/x/dist/styles/x.css').guardrail, 'fileTools');
     allowed('grep -n "interface WebSocketRoute" -A 60 node_modules/pw-core/types/types.d.ts');
     allowed('ls node_modules >/dev/null 2>&1');
   });
@@ -148,7 +148,8 @@ describe('heavy paths: bounded output and metadata across harnesses', () => {
     for (const command of commands) {
       test(`${expected ? 'blocks' : 'allows'} ${command}`, () => {
         const results = everyHarness({ claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash', input: { command } })
-          .map(([, payload, opts]) => checkTool(payload, { ...opts, overrides: {} }));
+          // Isolate the volume policy: fileTools independently requires native reads.
+          .map(([, payload, opts]) => checkTool(payload, { ...opts, overrides: { guardrails: { fileTools: { enabled: false } } } }));
         assert.equal(results[0].blocked, expected, command);
         if (expected) assert.equal(results[0].guardrail, 'heavyPath');
         for (const result of results) assert.deepEqual(result, results[0]);

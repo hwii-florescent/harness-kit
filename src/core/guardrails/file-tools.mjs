@@ -1,4 +1,4 @@
-// Prefer native read -> edit/write tools for direct, non-scratch file changes.
+// Require native read -> edit/write tools for direct, non-scratch file access.
 // ponytail: shell/source heuristics, not a sandbox. Hidden script writes/eval can
 // bypass this; unresolved paths and complex shell control flow stay conservative.
 // Upgrade to a shell AST if the remaining syntax limits become frequent.
@@ -14,6 +14,12 @@ export const BLOCK_REASON =
 	"literal scratch destinations are exempt, but unresolved write destinations are not. " +
 	"With the user's authorization, guardrails.fileTools.enabled can be set to false " +
 	"in .harness-kit.local.json; restore it after the exception.";
+
+export const READ_BLOCK_REASON =
+	"harness-kit: blocked shell-based file read. Use the native read tool " +
+	"(offset/limit for a line window), or read_symbol/read_enclosing for source bodies. " +
+	"This makes the first read usable by read-before-edit tools instead of reading the file twice. " +
+	"Search (grep/rg), listings, metadata, builds/tests and literal scratch reads are fine.";
 
 function maskQuotes(text) {
 	const quoted = [];
@@ -77,6 +83,68 @@ function sourceWritesWorkspace(source, cwd) {
 			.some((match) => /[wax+]/.test(restore(match[1], quoted)));
 }
 
+// Keep searches and metadata out: these commands directly display/process files.
+const READERS = new Set(['cat', 'bat', 'less', 'more', 'head', 'tail', 'sed', 'awk',
+	'nl', 'tac', 'sort', 'uniq', 'cut', 'paste', 'column', 'od', 'xxd', 'strings', 'jq', 'yq']);
+const READ_VALUE_FLAGS = {
+	head: ['-n', '-c', '--lines', '--bytes'],
+	tail: ['-n', '-c', '--lines', '--bytes', '-s', '--sleep-interval', '--pid'],
+	awk: ['-F', '-v'], cut: ['-b', '-c', '-d', '-f', '--bytes', '--characters', '--delimiter', '--fields'],
+	sort: ['-k', '-t', '-S', '-T', '--key', '--field-separator', '--buffer-size', '--temporary-directory'],
+	uniq: ['-f', '-s', '-w'], paste: ['-d', '--delimiters'],
+	nl: ['-b', '-d', '-f', '-h', '-i', '-l', '-n', '-s', '-v', '-w'],
+	column: ['-c', '-s', '-o'], od: ['-A', '-j', '-N', '-t', '-w'],
+	xxd: ['-c', '-g', '-l', '-s'], strings: ['-n', '-t', '-e', '--bytes', '--radix', '--encoding'],
+	bat: ['-l', '--language', '--style', '--theme', '--paging', '--line-range', '--tabs', '--terminal-width', '--color'],
+};
+
+function readTargets(head, words) {
+	const targets = [];
+	const patternTool = ['sed', 'awk', 'jq', 'yq'].includes(head);
+	let pattern = patternTool;
+	let flags = true;
+	for (let i = 1; i < words.length; i++) {
+		const word = words[i];
+		if (flags && word === '--') { flags = false; continue; }
+		if (flags && word.startsWith('-') && word !== '-') {
+			const flag = word.split('=')[0];
+			if (patternTool && ['-f', '--file', '-e', '--expression'].includes(flag)) {
+				const value = word.includes('=') ? word.slice(word.indexOf('=') + 1) : words[++i];
+				if (['-f', '--file'].includes(flag) && value) targets.push(value);
+				pattern = false;
+			} else if (['--arg', '--argjson', '--slurpfile', '--rawfile'].includes(flag)) {
+				i++; // variable name, then value (a path only for file flags)
+				const value = words[++i];
+				if (flag.endsWith('file') && value) targets.push(value);
+			} else if (READ_VALUE_FLAGS[head]?.includes(flag) && !word.includes('=')) i++;
+			continue;
+		}
+		if (pattern) { pattern = false; continue; }
+		if (word && word !== '-') targets.push(word);
+	}
+	return targets;
+}
+
+function sourceReadsWorkspace(source, cwd) {
+	const { masked, quoted } = maskQuotes(source);
+	const literal = String.raw`\u0001\d+\u0001`;
+	const calls = new RegExp(
+		String.raw`\bopen\s*\(\s*([^,\n)]+)(?:,\s*(?:mode\s*=\s*)?([^,\n)]+))?` +
+		'|' + String.raw`\b(?:readFile(?:Sync)?|createReadStream|readTextFile(?:Sync)?|readBinaryFile(?:Sync)?)\s*\(\s*([^,\n)]+)` +
+		'|' + String.raw`\b(?:pathlib\.)?Path\s*\(\s*(${literal})\s*\)\s*\.\s*(?:read_text|read_bytes)\s*\(`,
+		'g',
+	);
+	let unsafe = false;
+	const remaining = masked.replace(calls, (_match, pythonPath, mode, nodePath, pathlibPath) => {
+		const modeValue = mode && restore(mode.trim(), quoted);
+		if (pythonPath && modeValue && /^[wax][bt]?$/.test(modeValue)) return ' ';
+		const target = (pythonPath || nodePath || pathlibPath).trim();
+		if (target !== '0' && (!new RegExp(`^${literal}$`).test(target) || !isScratch(restore(target, quoted), cwd))) unsafe = true;
+		return ' ';
+	});
+	return unsafe || /\b(?:read_text|read_bytes|readFile(?:Sync)?|createReadStream|readTextFile(?:Sync)?|readBinaryFile(?:Sync)?)\s*\(/.test(remaining);
+}
+
 export function classifyBashCommand(command, cwd = process.cwd()) {
 	if (typeof command !== "string") return null;
 	command = unwrapShellExecutor(command);
@@ -119,6 +187,17 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 		const words = sub.split(/\s+/).map((word) => restore(word, quoted));
 		if (words[0] === "sudo") words.shift();
 		const head = path.basename(words[0] || "");
+		const inPlace = ['sed', 'perl', 'ruby'].includes(head) && words.some((word) => /^-[a-zA-Z]*i|^--in-place/.test(word));
+		if (READERS.has(head) && !inPlace) {
+			const inputs = [];
+			// Heredocs/here-strings are data; only a single < names an input file.
+			const operands = sub.replace(/\d*(<<<|<<|<|>>|>\||>)(?:&[\d-]+|\s*([^\s;&|<>()]+))/g, (_match, op, target) => {
+				if (op === '<' && target) inputs.push(restore(target, quoted));
+				return ' ';
+			}).split(/\s+/).map((word) => restore(word, quoted));
+			if (operands[0] === 'sudo') operands.shift();
+			if ([...inputs, ...readTargets(head, operands)].some((file) => !isScratch(file, directory))) return READ_BLOCK_REASON;
+		}
 		if (head === "tee" || head === "truncate") {
 			const files = words.slice(1).filter((word, i, rest) => !word.startsWith("-") &&
 				!(head === "truncate" && ["-s", "--size", "-r", "--reference"].includes(rest[i - 1])));
@@ -127,7 +206,7 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 		if (head === "dd" && words.slice(1).some((word) => word.startsWith("of=") && !isScratch(word.slice(3), directory))) {
 			return BLOCK_REASON;
 		}
-		if (["sed", "perl", "ruby"].includes(head) && words.some((word) => /^-[a-zA-Z]*i|^--in-place/.test(word))) {
+		if (inPlace) {
 			const files = [];
 			let script = head === "sed";
 			for (let i = 1; i < words.length; i++) {
@@ -148,6 +227,7 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 			else if (inline) source = restore(inline[1], quoted);
 			else if (hereString) source = restore(hereString[1], quoted);
 			if (source !== null && sourceWritesWorkspace(source, directory)) return BLOCK_REASON;
+			if (source !== null && sourceReadsWorkspace(source, directory)) return READ_BLOCK_REASON;
 		}
 	}
 	return null;
@@ -156,5 +236,7 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 export function check(call, config) {
 	if (config?.guardrails?.fileTools?.enabled === false || call.kind !== KIND.SHELL) return null;
 	const reason = classifyBashCommand(call.command, call.cwd);
-	return reason ? { blocked: true, guardrail: "fileTools", rule: "shell-write", target: "shell command", reason } : null;
+	if (!reason) return null;
+	const rule = reason === READ_BLOCK_REASON ? "shell-read" : "shell-write";
+	return { blocked: true, guardrail: "fileTools", rule, target: "shell command", reason };
 }

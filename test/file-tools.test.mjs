@@ -17,8 +17,23 @@ const allowed = [
   'git status --short', 'npm run build', 'grep -n "writeFileSync" src/a.ts',
   `rg 'writeFileSync' src; python3 - <<'PY'\nprint('read only')\nPY`,
   `python3 -c "print('writeFileSync')"`,
-  `python3 - <<'PY'\nprint(open('README.md','r').read())\nPY`,
   'echo x > /tmp/hk-guard-test.txt', 'echo x > /private/tmp/hk-guard-test.txt',
+  'ls src', 'find src -type f', 'wc -l README.md', 'stat README.md', 'git diff',
+  'ls src | head -n 20', 'npm test | tail --lines=10', 'printf hi | cat -n',
+  'head -n 10', 'tail -c 100', 'cat', 'cat -', 'cat <<< "not a file"',
+  'head -n 10 2>&1', 'cat <&0', 'cat /tmp/hk-guard-test.txt 2>&1',
+  `cat <<'TEXT'\nREADME.md\nTEXT`,
+  'cat /tmp/hk-guard-test.txt', 'cat < /tmp/hk-guard-test.txt',
+  'cd /tmp && head -n 10 hk-guard-test.txt',
+  'sed -n "1,20p" /tmp/hk-guard-test.txt',
+  `awk -v label=hello '{print label, $0}' /tmp/hk-guard-test.txt`,
+  `jq --arg label hello '.x' /tmp/hk-guard-test.txt`,
+  `python3 -c "print(open('/tmp/hk-guard-test.txt').read())"`,
+  `python3 -c "from pathlib import Path; print(Path('/tmp/hk-guard-test.txt').read_text())"`,
+  `node -e "console.log(require('fs').readFileSync('/tmp/hk-guard-test.txt','utf8'))"`,
+  `python3 -c "import sys; print(sys.stdin.read())"`,
+  `node -e "console.log(require('fs').readFileSync(0,'utf8'))"`,
+  `python3 -c "print('open(README.md).read()')"`,
   `python3 - <<'PY'\nopen('/tmp/hk-guard-test.txt','w').write('x')\nPY`,
   `node -e "require('fs').writeFileSync('/tmp/hk-guard-test.txt','x')"`,
   `python3 -c "from pathlib import Path; Path('/tmp/hk-guard-test.txt').write_text('x')"`,
@@ -35,6 +50,25 @@ const allowed = [
 ];
 const blocked = [
   'echo x > src/a.ts', 'cat >> src/a.ts <<\'EOF\'\nx\nEOF',
+  'cat README.md', 'cat -n README.md', 'cat -- README.md', '/bin/cat README.md',
+  'cat "docs/a b.md"', 'cat /tmp/hk-guard-test.txt README.md', 'cat "$FILE"',
+  'cat < README.md', 'cat <README.md', 'cat README.md > /tmp/hk-guard-test.txt',
+  'head -n 20 README.md', 'head -20 README.md', 'tail --lines=20 README.md',
+  'cat README.md | head -20', 'git status; cat README.md',
+  'env FOO=bar /bin/cat README.md', 'sudo cat README.md', `bash -c 'cat README.md'`,
+  `sed -n '1,20p' src/a.ts`, `sed -e 's/a/b/' src/a.ts`,
+  `awk -F : -v label=hi '{print $1}' README.md`,
+  `jq --arg label hi '.x' package.json`, 'nl -b a README.md', 'sort -n README.md',
+  'cut -f 1 README.md', 'bat --line-range 1:20 README.md',
+  `python3 - <<'PY'\nprint(open('README.md','r').read())\nPY`,
+  `python3 -c "print(open('README.md').read())"`,
+  `python3 -c "p='README.md'; print(open(p).read())"`,
+  `python3 -c "from pathlib import Path; print(Path('README.md').read_text())"`,
+  `python3 -c "print(p.read_text())"`,
+  `node -e "console.log(require('fs').readFileSync('README.md','utf8'))"`,
+  `node -e "fs.readFile(file, callback)"`,
+  `node <<'JS'\nfs.createReadStream('README.md').pipe(process.stdout)\nJS`,
+  `python3 <<< "print(open('README.md').read())"`,
   "sed -i '' 's/a/b/' src/a.ts", `python3 -c "open('src/a.ts','w').write('x')"`,
   `node -e "require('fs').writeFileSync('src/a.ts','x')"`,
   `python3 -c "p='src/a.ts'; open(p,'w').write('x')"`,
@@ -86,8 +120,15 @@ test('resolves scratch symlinks, parent traversal and missing descendants conser
   for (const target of [
     `${dir}/outside/hk-file.txt`, `${dir}/outside/../hk-file.txt`,
     `${dir}/outside/new-directory/hk-file.txt`, `${dir}/dangling/hk-file.txt`,
-  ]) assert.ok(classify(`echo x > ${target}`, cwd), target);
+  ]) {
+    assert.ok(classify(`echo x > ${target}`, cwd), target);
+    assert.ok(classify(`cat ${target}`, cwd), target);
+  }
   assert.equal(classify(`echo x > ${dir}/new-directory/hk-file.txt`, cwd), null);
+  assert.equal(classify(`cat ${dir}/new-directory/hk-file.txt`, cwd), null);
+  assert.equal(classify('cat local-file.txt', dir), null);
+  assert.ok(classify(`cd ${dir} && cat ${cwd}/src/a.ts`, cwd));
+  assert.ok(classify(`node -e "fs.readFileSync(file)"`, dir), 'variable source path is not a literal scratch path');
 });
 
 test('TMPDIR is resolved, not blindly trusted', () => {
@@ -107,6 +148,18 @@ test('native file tools are unaffected', () => {
   for (const toolName of ['read', 'write', 'edit', 'apply_patch']) {
     assert.equal(checkTool({ toolName, input: { path: 'src/a.ts', content: 'x' } }, { cwd }).blocked, false);
   }
+});
+
+test('shell read verdict directs the first read to native tools without tracking native reads', () => {
+  const payload = { toolName: 'bash', input: { command: 'cat README.md' } };
+  const check = () => checkTool(payload, { cwd });
+  const verdict = check();
+  assert.equal(verdict.rule, 'shell-read');
+  assert.match(verdict.reason, /native read tool/);
+  assert.match(verdict.reason, /offset\/limit/);
+  assert.equal(checkTool({ toolName: 'read', input: { path: 'README.md' } }, { cwd }).blocked, false);
+  assert.deepEqual(check(), verdict, 'native reads do not authorize later shell reads');
+  assert.equal(checkTool(payload, { cwd, overrides: { guardrails: { fileTools: { enabled: false } } } }).blocked, false);
 });
 
 test('effective shell cwd follows tool arguments and resolves relative workdirs', () => {

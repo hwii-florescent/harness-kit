@@ -23,8 +23,8 @@ if (heavyBounds) {
   fs.writeFileSync(path.join(root, 'node_modules', 'hk-heavy-fixture', 'package.json'), '{"name":"hk-heavy-fixture","description":"HK_METADATA_MARKER"}\n');
 }
 const commands = ['grep -rn "build" src', 'cat .env', 'ls node_modules'];
-if (fileTools) commands.push('echo HK_WRITE_TEST > src/blocked.txt', `echo HK_SCRATCH_TEST > "${scratchFile}"; cat "${scratchFile}"`);
-if (heavyBounds) commands.push('ls -ld node_modules', 'ls node_modules | head -20', 'cd src/nested && cat ../../node_modules/hk-heavy-fixture/package.json');
+if (fileTools) commands.push('cat src/smoke.txt', 'echo HK_WRITE_TEST > src/blocked.txt', `echo HK_SCRATCH_TEST > "${scratchFile}"; cat "${scratchFile}"`);
+if (heavyBounds) commands.push('ls -ld node_modules', 'ls node_modules | head -20', 'cd src/nested && grep -n HK_METADATA_MARKER ../../node_modules/hk-heavy-fixture/package.json');
 const prompt = `Authorized integration smoke in a temporary fixture directory. Make exactly ${commands.length} separate shell calls in this order: `
   + commands.map((command, i) => `(${i + 1}) ${command}`).join(' ')
   + '. The credential file contains only synthetic test data. '
@@ -97,16 +97,17 @@ for (const name of names) {
   const heavyBlock = feedback.includes('harness-kit: blocked exploring "node_modules"');
   const leaked = result.stdout.includes(fakeSecret);
   const fileBlock = feedback.includes('harness-kit: blocked shell-based file modification');
+  const readBlock = feedback.includes('harness-kit: blocked shell-based file read');
   const noWorkspaceWrite = !fs.existsSync(path.join(root, 'src', 'blocked.txt'));
   const scratchWrite = fs.existsSync(scratchFile) && fs.readFileSync(scratchFile, 'utf8') === 'HK_SCRATCH_TEST\n';
-  const filesOk = !fileTools || (fileBlock && noWorkspaceWrite && scratchWrite);
+  const filesOk = !fileTools || (readBlock && fileBlock && noWorkspaceWrite && scratchWrite);
   const directoryStat = successfulOutput.some((text) => /^[dl-][rwxstST-]{9}.*\bnode_modules\s*$/m.test(text));
   const boundedList = successfulOutput.some((text) => text.trim() === 'hk-heavy-fixture');
   const packageMetadata = successfulOutput.some((text) => text.includes('HK_METADATA_MARKER'));
   const boundsOk = !heavyBounds || (directoryStat && boundedList && packageMetadata);
   const ok = result.code === 0 && !result.timedOut && pass && secretBlock && heavyBlock && !leaked && filesOk && boundsOk;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}: source=${pass}, secret-block=${secretBlock}, heavy-block=${heavyBlock}, leaked=${leaked}, exit=${result.code}`
-    + (fileTools ? `, file-block=${fileBlock}, workspace-untouched=${noWorkspaceWrite}, scratch-write=${scratchWrite}` : '')
+    + (fileTools ? `, read-block=${readBlock}, file-block=${fileBlock}, workspace-untouched=${noWorkspaceWrite}, scratch-write=${scratchWrite}` : '')
     + (heavyBounds ? `, directory-stat=${directoryStat}, bounded-list=${boundedList}, package-metadata=${packageMetadata}` : ''));
   fs.rmSync(scratchFile, { force: true });
   if (!ok) {

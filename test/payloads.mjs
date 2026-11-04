@@ -59,6 +59,14 @@ export const CASES = {
     claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
     input: { command: 'echo x > /harness-kit-non-scratch-fixture/src/a.ts' },
   },
+  shellRead: {
+    claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
+    input: { command: 'cat /harness-kit-non-scratch-fixture/src/a.ts' },
+  },
+  scratchRead: {
+    claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
+    input: { command: 'cat /tmp/hk-guard-test.txt' },
+  },
   scratchWrite: {
     claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash',
     input: { command: 'echo x > /tmp/hk-guard-test.txt' },

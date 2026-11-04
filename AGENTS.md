@@ -21,7 +21,7 @@ One guardrail core running unmodified on four coding agents. Four guardrails
 The remaining Phase 0 work is a two-week dogfood, not code.
 
 ```bash
-npm test        # 360 hermetic regression tests
+npm test        # 430 hermetic regression tests
 npm run replay  # would-block rate, not a measured false-positive rate
 npm run doctor  # registration and retained intervention counts
 npm run smoke -- --file-tools --heavy-bounds claude codex pi omp # live, billable; Haiku/Luna
@@ -40,9 +40,12 @@ has practical consequences:
 - Listing a `node_modules` root is blocked. Use a bounded read instead:
   `grep -c x path/to/file` or `ls path/to/specific/file`.
 - The secret/heavy-path shell extractors strip heredoc bodies, but `fileTools`
-  inspects interpreter source and output redirects. Use native write/edit tools
+  inspects interpreter source and redirects. Direct non-scratch shell reads
+  (`cat`, `head`, `tail`, `sed`, inline Python/Node, etc.) now block too: use
+  native read/source-body tools first so editors can reuse that read. Search,
+  listings, metadata and stdin filters still pass. Use native write/edit tools
   for test fixtures rather than a shell heredoc into a workspace file. Literal
-  scratch destinations are exempt; unresolved variables remain conservative.
+  scratch paths are exempt; unresolved variables remain conservative.
 - The persistent escape hatch is effective on the next tool call with no
   restart. Use `allow` for `secret`/`heavyPath`, or `enabled:false` for
   `broadGlob` / `fileTools`.
@@ -155,7 +158,7 @@ Run all of these after touching `bash.mjs` or any guardrail. Unit tests alone
 have missed every serious defect found so far.
 
 ```bash
-npm test                        # 360 hermetic regression tests
+npm test                        # 430 hermetic regression tests
 npm run replay -- --verbose     # rate + the actual remaining blocks
 node scripts/doctor.mjs         # wiring honest?
 ```
@@ -208,13 +211,16 @@ Phase 0's remaining work, in order:
 
 Do not start Phase 1 (publishing) until the SCOPE.md exit criteria are met.
 
-Current numbers: 360 tests; replay 407/6,872 in-scope calls (5.92%): 402
-fileTools matches plus 5 heavyPath matches. Bounded-read cleanup reduced heavyPath
-from 19: 13 calls now pass and one reaches an existing fileTools block. Direct
-head/tail pipeline exemptions require literal limits <=200 lines/16 KiB; wc
-summaries, directory-only ls, and concrete dependency manifests also pass. This
-is not a measured false-positive rate; review conservative scratch-variable and
-workspace log-redirect blocks. File-tools scratch roots are path-based (including
-projects under /tmp); hidden script writes and unsupported shell syntax remain
-heuristic limits, not a sandbox. A prior red-team run covered 39 vectors; three
-deliberate shell-evasion cases remain outside the well-meaning-agent threat model.
+Current numbers: 430 tests; replay 763/9,528 in-scope calls (8.01%): 762
+fileTools matches plus 1 heavyPath match. The corpus has grown, and fileTools now
+routes direct non-scratch shell reads to native tools as well as blocking writes.
+The expanded read/write + heavy-bounds live smoke passed on all four harnesses.
+The heavyPath head/tail pipeline exemptions still require literal limits <=200
+lines/16 KiB; wc summaries and directory-only ls also pass. HeavyPath's concrete
+dependency-manifest exemption does not bypass fileTools: use native read or a
+search. This is not a measured false-positive rate; review conservative
+scratch-variable, missing historical cwd and workspace log-redirect blocks.
+File-tools scratch roots are path-based (including projects under /tmp); hidden
+script reads/writes and unsupported shell syntax/APIs remain heuristic limits,
+not a sandbox. A prior red-team run covered 39 vectors; three deliberate
+shell-evasion cases remain outside the well-meaning-agent threat model.

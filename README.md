@@ -15,7 +15,7 @@ npm run replay        # would-block rate against recorded agent history
 npm run doctor        # registration + retained decision counts
 npm run smoke -- codex pi omp  # LIVE, billable; cheap Luna models
 npm run smoke -- claude        # LIVE, billable; Haiku, $0.15 session cap
-npm run smoke -- --file-tools codex pi omp # also tests shell-write block + scratch write
+npm run smoke -- --file-tools codex pi omp # shell read/write blocks + scratch access
 npm run smoke -- --heavy-bounds claude codex pi omp # metadata + bounded listings must run
 ```
 
@@ -28,7 +28,7 @@ Four guardrails share one core decision on Claude Code, Codex, Pi and omp:
 | `secret` | `.env`, `*.pem`, `id_rsa`, `credentials.json`, … | Stops credentials entering model context |
 | `heavyPath` | reads inside `node_modules`, `dist`, `.git`, … | Stops generated files flooding the context window |
 | `broadGlob` | `**/*.ts` at the project root | Same, for discovery tools |
-| `fileTools` | Common direct shell/interpreter writes to non-scratch files | Keeps edits on native file tools |
+| `fileTools` | Common direct shell/interpreter reads and writes to non-scratch files | Keeps the first read usable by native edit tools |
 
 Each guardrail is configurable and individually disablable. Core failures fail
 open; a block can be persistently exempted in configuration. These are path and
@@ -43,6 +43,9 @@ These pipeline exemptions do not apply to secrets. Quoted/commented pipes,
 are not accepted as bounds; later commands are still checked independently.
 Wildcard and recursive listings remain conservative. A named manifest is
 treated as metadata without a byte-size check, not as a universal size guarantee.
+These are `heavyPath` exemptions only: `fileTools` still requires native tools
+for direct non-scratch file reads, including dependency manifests and bounded
+`cat`/`sed` reads. Listings piped to `head`/`tail` remain allowed.
 
 ## How one core serves four harnesses
 
@@ -130,6 +133,12 @@ NotebookEdit. After the bounded-read cleanup, the same corpus reports **407
 The remaining five are listings/recursive diffs without a proven bound. Review
 the actual commands, not just the percentage.
 
+After shell-read enforcement, the expanded corpus reports **763/9,528 (8.01%)**:
+**762 fileTools**, **1 heavyPath**. Many new matches are the intended `cat`/`sed`
+source reads; scratch variables and missing historical working directories
+remain conservative. Corpus growth means this is not an apples-to-apples
+comparison with the older rates above.
+
 `test/extraction.test.mjs` pins the classes replay uncovered so they cannot
 come back.
 
@@ -171,14 +180,14 @@ installed wiring/authentication, not fake adapters. It creates synthetic files
 in a temporary directory and requires a real source-search result plus secret
 and heavy-directory hook errors. A model refusal or quota error is a failure,
 not a successful block. Raw traces stay in the printed temporary directory.
-`--file-tools` adds an actual shell-write denial, verifies the workspace file was
-not created, and requires a successful scratch-file write. Its temporary project
+`--file-tools` adds actual shell-read and shell-write denials, verifies the
+workspace file was not created, and requires a successful scratch-file write/read. Its temporary project
 is created under the user's home, outside scratch roots; Codex uses its normal
 workspace-write sandbox for this check, not a sandbox bypass.
 `--heavy-bounds` additionally requires actual successful output from directory
-metadata, a capped listing, and a parent-relative dependency manifest read.
-Both flags can be combined; all eight checks passed on all four installed
-harnesses using Haiku/Luna in the 2026-11-02 bounded-read cleanup.
+metadata, a capped listing, and a parent-relative dependency manifest search.
+Both flags can be combined; the expanded read/write checks passed on all four
+installed harnesses using Haiku/Luna after shell-read enforcement.
 
 ## Configuration
 
@@ -200,25 +209,37 @@ Pi and omp sessions. A malformed or missing layer contributes nothing and later
 layers still apply. Persistent exceptions use `allow` for `secret` and
 `heavyPath`, or `enabled:false` for `broadGlob` / `fileTools`.
 
-### Direct file edits
+### Direct file reads and edits
 
 `fileTools` replaces the standalone Pi `prefer-builtin-file-tools` extension;
 do not keep both active. It applies to normalized shell calls on all four
 harnesses, including Codex `cmd` / `workdir`. Native read/write/edit/apply_patch
 calls are unaffected by this rule (other rules still apply).
 
-It detects common redirects, tee/truncate/dd outputs, in-place sed/perl/ruby,
-and inline/heredoc Python/Node/Path writes. Literal scratch destinations under
+It blocks direct file-content readers (`cat`, `bat`, `head`, `tail`, `sed`,
+`awk`, `jq`, and common formatters) and inline/heredoc Python/Node/Path file
+reads. The reason directs agents to native `read` with offset/limit, or source
+body tools such as `read_symbol`/`read_enclosing` when available. The first read
+can then satisfy the editor's read-before-edit requirement; there is no new
+read-history tracker, and native repeated reads are not prohibited.
+
+Search (`grep`/`rg`), listings, metadata (`wc`/`stat`), builds/tests and
+stdin-only filters remain allowed. This is direct-read routing, not a ban on
+all ways of viewing text: searches/diffs can still show source, and a new native
+read may still be needed after search alone.
+
+Write detection covers common redirects, tee/truncate/dd outputs, in-place
+sed/perl/ruby, and inline/heredoc Python/Node/Path writes. Literal scratch paths under
 `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` and `/dev` are
 exempt after resolving existing ancestors and symlinks; `$TMPDIR` is resolved
 and checked rather than trusted. Scratch roots are path-based, so a project
 itself under a scratch root also benefits from that exemption.
 
-Unknown variable destinations and complex control flow stay conservative.
+Unknown variable paths and complex control flow stay conservative.
 Build/test execution remains allowed, but a direct workspace log redirect such
 as `npm test > logs/test.log` blocks; redirect to a literal scratch file instead.
-This is a heuristic, not a sandbox: hidden script writes, eval, and unsupported
-shell syntax are not comprehensively analyzed. Read-only source text is scoped
+This is a heuristic, not a sandbox: hidden script reads/writes, eval, and
+unsupported shell syntax/APIs are not comprehensively analyzed. Source text is scoped
 to its own command/interpreter, not confused with a neighboring write script.
 Run `node --test test/file-tools.test.mjs` for the focused regression check.
 
