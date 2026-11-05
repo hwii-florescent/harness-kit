@@ -67,7 +67,7 @@ describe('quoting and heredocs', () => {
 
   test('heredoc bodies carry programs, not operands', () => {
     assert.equal(stripHeredocs("python3 - <<'PY'\nx = 'build'\nPY\n").includes('build'), false);
-    assert.equal(bash("python3 - <<'PY'\ns = open('docs/x.md').read()\nPY").guardrail, 'fileTools');
+    allowed("python3 - <<'PY'\ns = open('docs/x.md').read()\nPY");
   });
 
   test('newlines separate statements the way `;` does', () => {
@@ -86,7 +86,7 @@ describe('heavy paths: volume is the concern, not access', () => {
   test('bounded reads of one named file are ordinary work', () => {
     allowed('ls node_modules/ws/package.json');
     allowed('ls -l target/release/app-core');
-    assert.equal(bash('sed -n "3360,3520p" node_modules/x/dist/styles/x.css').guardrail, 'fileTools');
+    allowed('sed -n "3360,3520p" node_modules/x/dist/styles/x.css');
     allowed('grep -n "interface WebSocketRoute" -A 60 node_modules/pw-core/types/types.d.ts');
     allowed('ls node_modules >/dev/null 2>&1');
   });
@@ -114,6 +114,11 @@ describe('heavy paths: bounded output and metadata across harnesses', () => {
     'ls node_modules | head -c 100', 'ls node_modules | head --bytes=100',
     'ls node_modules | tail -3', 'cat .git/info/exclude | tail -n 3',
     'ls node_modules | wc -l', 'ls node_modules | wc',
+    'strings target/debug/perch-core | rg -c "frame too large|text_frames"',
+    'strings target/debug/perch-core | grep --count frame | sort -u',
+    "strings target/debug/perch-core | rg --count-matches 'frame too large'",
+    'ls node_modules | grep -c -- -pkg', 'ls node_modules | rg -c pkg',
+    'cat /tmp/perch-probe/samples/*.json | head -150',
     'cat dist/bundle.js | head -20', 'find dist -type f | head -20',
     'grep -rn "Props" node_modules/pkg | head -30',
     'ls node_modules | head -20; git status --short',
@@ -138,6 +143,14 @@ describe('heavy paths: bounded output and metadata across harnesses', () => {
     'ls node_modules > /dev/stderr | head -20',
     'ls node_modules # ignored | head -20', 'ls node_modules | echo "head -20"',
     'ls node_modules | head -20 dist/other.js',
+    'strings target/debug/perch-core | rg -c frame src/a.ts',
+    'strings target/debug/perch-core | rg -c --files',
+    'strings target/debug/perch-core | rg --files',
+    'strings target/debug/perch-core | rg -o frame | sort -u',
+    'strings target/debug/perch-core >&2 | rg -c frame',
+    'strings target/debug/perch-core | rg -c frame; cat dist/bundle.js',
+    'ls node_modules | grep -c "$PATTERN"',
+    'ls node_modules || rg -c pkg',
     'cat dist/bundle.js "| head -20"',
     'cat node_modules/*/package.json', 'cat node_modules/pkg/lib.js',
     'cat dist/bundle.js', 'find dist -type f',
@@ -148,17 +161,24 @@ describe('heavy paths: bounded output and metadata across harnesses', () => {
     for (const command of commands) {
       test(`${expected ? 'blocks' : 'allows'} ${command}`, () => {
         const results = everyHarness({ claudeTool: 'Bash', codexTool: 'shell', piTool: 'bash', input: { command } })
-          // Isolate the volume policy: fileTools independently requires native reads.
-          .map(([, payload, opts]) => checkTool(payload, { ...opts, overrides: { guardrails: { fileTools: { enabled: false } } } }));
+          .map(([, payload, opts]) => checkTool(payload, opts));
         assert.equal(results[0].blocked, expected, command);
         if (expected) assert.equal(results[0].guardrail, 'heavyPath');
         for (const result of results) assert.deepEqual(result, results[0]);
       });
     }
   }
+  test('noclobber redirects are not pipeline operators', () => {
+    assert.deepEqual(splitCompound('echo x >| src/a.ts', { keepOperators: true }), ['echo x >| src/a.ts']);
+    assert.equal(bash('echo x >| /harness-kit-workspace/a.ts').guardrail, 'fileTools');
+  });
   test('pipeline limits never exempt secret reads or shell writes', () => {
     assert.equal(bash('cat .env | head -20').guardrail, 'secret');
+    assert.equal(bash('cat /tmp/.env* | head -20').guardrail, 'secret');
+    assert.equal(bash('cat .env | rg -c KEY').guardrail, 'secret');
+    blocked('npm test > .env'); // Existing write protection also covers build redirects.
     assert.equal(bash('open .env').guardrail, 'secret');
+    assert.match(bash('npm test; ls node_modules').reason, /Trigger: "ls node_modules"/);
     assert.equal(bash('ls node_modules | head -20; echo x > /harness-kit-workspace/a.ts').guardrail, 'fileTools');
   });
   test('compound splitting preserves quoted separators and real operator identity', () => {

@@ -142,7 +142,7 @@ export function check(call, config) {
         // Is the blocked directory itself the thing being listed, or is it
         // merely an ancestor of a specific path inside it?
         if (isBoundedRead(sub, p, { listingRoot: match.isRoot })) continue;
-        return verdict(p, match.rule);
+        return verdict(p, match.rule, sub);
       }
     }
   }
@@ -150,7 +150,7 @@ export function check(call, config) {
   return null;
 }
 
-function verdict(target, rule) {
+function verdict(target, rule, command) {
   return {
     blocked: true,
     guardrail: 'heavyPath',
@@ -165,6 +165,7 @@ function verdict(target, rule) {
       `though for an installed dependency the shipped files are the only source ` +
       `there is. Build and test commands (npm run build, cargo test, …) are ` +
       `not affected by this rule.\n` +
+      (command ? `Trigger: ${JSON.stringify(command.slice(0, 160))}.\n` : '') +
       `To allow permanently, add a pattern to guardrails.heavyPath.allow in .harness-kit.json.`,
   };
 }

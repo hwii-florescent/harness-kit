@@ -88,6 +88,9 @@ for (const [name, extension] of [['pi', piExtension], ['omp', ompExtension]]) {
       if (result) {
         assert.equal(result.message.customType, 'harness-kit');
         assert.equal(typeof result.message.content, 'string');
+        assert.match(result.message.content, /Prefer native read\/source-body tools before editing/);
+        assert.match(result.message.content, /routine shell inspection is allowed/);
+        assert.doesNotMatch(result.message.content, /fileTools|heavyPath|broadGlob/);
       }
     });
 
@@ -111,7 +114,7 @@ describe('tier B: matches tier A', () => {
     readSecret: true, readSafeExample: false,
     listHeavyDir: true, buildCommand: false,
     shellWrite: true, scratchWrite: false,
-    shellRead: true, scratchRead: false,
+    shellRead: false, scratchRead: false,
     broadGlob: true, scopedGlob: false,
   };
 

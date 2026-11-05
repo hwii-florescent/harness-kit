@@ -41,7 +41,7 @@ export function splitCompound(command, { keepOperators = false } = {}) {
   const out = [];
   let start = 0;
   // Quoted/escaped operators and comments are data, not pipeline boundaries.
-  const syntax = /'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]|(?:^|(?<=[\s;|&]))#[^\n]*|(&&|\|\||[;|\n])/g;
+  const syntax = /'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]|(?:^|(?<=[\s;|&]))#[^\n]*|(&&|\|\||[;\n]|(?<!>)\|)/g;
   for (const match of command.matchAll(syntax)) {
     if (!match[1]) continue;
     const sub = command.slice(start, match.index).trim();
@@ -101,8 +101,13 @@ export function suspectSubCommands(command, { boundedPipes = false } = {}) {
 function isBoundedPipeConsumer(command) {
   const s = stripPrefix(command ?? '');
   if (/^wc(?:\s+-[lwmcL]+)*\s*$/.test(s)) return true;
-  // ponytail: only direct stdout -> literal head/tail limits (200 lines/16 KiB)
-  // or wc are proven here. General pipelines/control flow need a shell AST.
+  const [head, flag, ...args] = tokenize(s);
+  if (/^(?:rg|grep|egrep|fgrep)$/.test(head ?? '') && /^(?:-c|--count|--count-matches)$/.test(flag ?? '')
+    && !/[<>`$]/.test(args.join(''))
+    && ((args.length === 1 && !args[0].startsWith('-')) || (args.length === 2 && args[0] === '--'))) return true;
+  // ponytail: only direct stdout -> literal head/tail limits (200 lines/16 KiB),
+  // wc, or one count-only grep pattern without file operands are proven here.
+  // General pipelines/control flow need a shell AST.
   const match = /^(?:head|tail)(?:\s+(?:-(\d+)|-n\s*(\d+)|--lines(?:=|\s+)(\d+)|-c\s*(\d+)|--bytes(?:=|\s+)(\d+)))?\s*$/.exec(s);
   if (!match) return false;
   const bytes = match[4] ?? match[5];

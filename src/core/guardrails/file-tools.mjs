@@ -1,4 +1,4 @@
-// Require native read -> edit/write tools for direct, non-scratch file access.
+// Require native edit/write tools for non-scratch file modifications.
 // ponytail: shell/source heuristics, not a sandbox. Hidden script writes/eval can
 // bypass this; unresolved paths and complex shell control flow stay conservative.
 // Upgrade to a shell AST if the remaining syntax limits become frequent.
@@ -6,20 +6,18 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { KIND } from "../normalize.mjs";
-import { stripPrefix, unwrapShellExecutor } from "../bash.mjs";
+import { splitCompound, stripPrefix, unwrapShellExecutor } from "../bash.mjs";
 
 export const BLOCK_REASON =
 	"harness-kit: blocked shell-based file modification. Use the native read tool first, " +
-	"then edit/write/apply_patch as appropriate. Builds and tests are fine; " +
-	"literal scratch destinations are exempt, but unresolved write destinations are not. " +
+	"then edit/write/apply_patch as appropriate. Build/test execution and literal .log output " +
+	"in the working directory or logs/ are allowed; other non-scratch shell writes " +
+	"and unresolved destinations are not. " +
 	"With the user's authorization, guardrails.fileTools.enabled can be set to false " +
 	"in .harness-kit.local.json; restore it after the exception.";
 
-export const READ_BLOCK_REASON =
-	"harness-kit: blocked shell-based file read. Use the native read tool " +
-	"(offset/limit for a line window), or read_symbol/read_enclosing for source bodies. " +
-	"This makes the first read usable by read-before-edit tools instead of reading the file twice. " +
-	"Search (grep/rg), listings, metadata, builds/tests and literal scratch reads are fine.";
+const blockedWrite = (operation, target) => BLOCK_REASON + "\nTrigger: " + operation +
+	(target ? ` to ${JSON.stringify(target.slice(0, 160))}.` : " (destination not proven scratch).");
 
 function maskQuotes(text) {
 	const quoted = [];
@@ -61,6 +59,19 @@ function isScratch(target, cwd) {
 	} catch { return false; }
 }
 
+// ponytail: explicit build/test heads and direct tee pipes only; wrappers and
+// arbitrary script names use scratch logs instead. Expand from dogfood examples.
+const BUILD_TEST = /^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|check|typecheck|lint)(?::[\w.-]+)?|(?:(?:npx|pnpx|bunx)\s+(?:--no-install\s+)?)?(?:vitest|jest|tsc|pytest)|(?:cargo|go|swift)\s+(?:build|test|check|clippy)|node\s+--test)(?=\s|$)/;
+
+function isBuildLog(target, cwd) {
+	if (!cwd || !target || /[$`*?{}\\]/.test(target)) return false;
+	try {
+		const base = realDestination(cwd);
+		const dest = realDestination(path.isAbsolute(target) ? target : `${cwd}/${target}`);
+		return /^(?:logs\/)?[\w-][\w.-]*\.log$/.test(path.relative(base, dest));
+	} catch { return false; }
+}
+
 // Only exempt write calls with a literal scratch destination. Unknown receiver
 // writes (f.write, variable paths, etc.) still require the builtin file tools.
 function sourceWritesWorkspace(source, cwd) {
@@ -79,70 +90,8 @@ function sourceWritesWorkspace(source, cwd) {
 		return " ";
 	}).replace(/\b(?:sys|process)\.(?:stdout|stderr)\.write\s*\(/g, " ");
 	return unsafe || /\.\s*(?:write|writelines)\s*\(|\b(?:write_text|write_bytes|writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream)\b/.test(remaining)
-		|| [...remaining.matchAll(/\bopen\s*\([^\n]*?,\s*(?:mode\s*=\s*)?(\u0001\d+\u0001)/g)]
+		|| [...remaining.matchAll(/\bopen\s*\((?:[^()\n]|\([^()\n]*\))*?,\s*(?:mode\s*=\s*)?(\u0001\d+\u0001)/g)]
 			.some((match) => /[wax+]/.test(restore(match[1], quoted)));
-}
-
-// Keep searches and metadata out: these commands directly display/process files.
-const READERS = new Set(['cat', 'bat', 'less', 'more', 'head', 'tail', 'sed', 'awk',
-	'nl', 'tac', 'sort', 'uniq', 'cut', 'paste', 'column', 'od', 'xxd', 'strings', 'jq', 'yq']);
-const READ_VALUE_FLAGS = {
-	head: ['-n', '-c', '--lines', '--bytes'],
-	tail: ['-n', '-c', '--lines', '--bytes', '-s', '--sleep-interval', '--pid'],
-	awk: ['-F', '-v'], cut: ['-b', '-c', '-d', '-f', '--bytes', '--characters', '--delimiter', '--fields'],
-	sort: ['-k', '-t', '-S', '-T', '--key', '--field-separator', '--buffer-size', '--temporary-directory'],
-	uniq: ['-f', '-s', '-w'], paste: ['-d', '--delimiters'],
-	nl: ['-b', '-d', '-f', '-h', '-i', '-l', '-n', '-s', '-v', '-w'],
-	column: ['-c', '-s', '-o'], od: ['-A', '-j', '-N', '-t', '-w'],
-	xxd: ['-c', '-g', '-l', '-s'], strings: ['-n', '-t', '-e', '--bytes', '--radix', '--encoding'],
-	bat: ['-l', '--language', '--style', '--theme', '--paging', '--line-range', '--tabs', '--terminal-width', '--color'],
-};
-
-function readTargets(head, words) {
-	const targets = [];
-	const patternTool = ['sed', 'awk', 'jq', 'yq'].includes(head);
-	let pattern = patternTool;
-	let flags = true;
-	for (let i = 1; i < words.length; i++) {
-		const word = words[i];
-		if (flags && word === '--') { flags = false; continue; }
-		if (flags && word.startsWith('-') && word !== '-') {
-			const flag = word.split('=')[0];
-			if (patternTool && ['-f', '--file', '-e', '--expression'].includes(flag)) {
-				const value = word.includes('=') ? word.slice(word.indexOf('=') + 1) : words[++i];
-				if (['-f', '--file'].includes(flag) && value) targets.push(value);
-				pattern = false;
-			} else if (['--arg', '--argjson', '--slurpfile', '--rawfile'].includes(flag)) {
-				i++; // variable name, then value (a path only for file flags)
-				const value = words[++i];
-				if (flag.endsWith('file') && value) targets.push(value);
-			} else if (READ_VALUE_FLAGS[head]?.includes(flag) && !word.includes('=')) i++;
-			continue;
-		}
-		if (pattern) { pattern = false; continue; }
-		if (word && word !== '-') targets.push(word);
-	}
-	return targets;
-}
-
-function sourceReadsWorkspace(source, cwd) {
-	const { masked, quoted } = maskQuotes(source);
-	const literal = String.raw`\u0001\d+\u0001`;
-	const calls = new RegExp(
-		String.raw`\bopen\s*\(\s*([^,\n)]+)(?:,\s*(?:mode\s*=\s*)?([^,\n)]+))?` +
-		'|' + String.raw`\b(?:readFile(?:Sync)?|createReadStream|readTextFile(?:Sync)?|readBinaryFile(?:Sync)?)\s*\(\s*([^,\n)]+)` +
-		'|' + String.raw`\b(?:pathlib\.)?Path\s*\(\s*(${literal})\s*\)\s*\.\s*(?:read_text|read_bytes)\s*\(`,
-		'g',
-	);
-	let unsafe = false;
-	const remaining = masked.replace(calls, (_match, pythonPath, mode, nodePath, pathlibPath) => {
-		const modeValue = mode && restore(mode.trim(), quoted);
-		if (pythonPath && modeValue && /^[wax][bt]?$/.test(modeValue)) return ' ';
-		const target = (pythonPath || nodePath || pathlibPath).trim();
-		if (target !== '0' && (!new RegExp(`^${literal}$`).test(target) || !isScratch(restore(target, quoted), cwd))) unsafe = true;
-		return ' ';
-	});
-	return unsafe || /\b(?:read_text|read_bytes|readFile(?:Sync)?|createReadStream|readTextFile(?:Sync)?|readBinaryFile(?:Sync)?)\s*\(/.test(remaining);
 }
 
 export function classifyBashCommand(command, cwd = process.cwd()) {
@@ -164,9 +113,10 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 	const { masked, quoted } = maskQuotes(shell.filter((line) => !line.trimStart().startsWith("#")).join("\n"));
 	let directory = cwd;
 	// Quotes and heredoc bodies are already masked, so their separators are data.
-	for (const part of masked.replace(/(^|\s)#[^\n]*/g, "$1").split(/&&|\|\||[;\n]|(?<!>)\|/)) {
-		const sub = stripPrefix(part.trim());
-		if (!sub) continue;
+	const parts = splitCompound(masked.replace(/(^|\s)#[^\n]*/g, "$1"), { keepOperators: true });
+	for (let i = 0; i < parts.length; i++) {
+		const sub = stripPrefix(parts[i]);
+		if (/^(?:&&|\|\||[;|\n])$/.test(sub)) continue;
 		// Do not carry a guessed cwd through groups, substitutions or control flow.
 		if (/[(){}]|^(?:if|then|else|fi|for|while|do|done)\b/.test(sub)) directory = null;
 		const cd = /^cd\s+(?:--\s+)?([^\s]+)$/.exec(sub);
@@ -181,30 +131,30 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 			} catch { directory = null; }
 			continue;
 		}
-		for (const match of sub.matchAll(/(?<![>=\-<])(?:>>|>\||>)(?!&)\s*([^\s;&|<>()]+)/g)) {
-			if (!isScratch(restore(match[1], quoted), directory)) return BLOCK_REASON;
-		}
 		const words = sub.split(/\s+/).map((word) => restore(word, quoted));
 		if (words[0] === "sudo") words.shift();
 		const head = path.basename(words[0] || "");
+		const buildTest = BUILD_TEST.test(sub);
+		for (const match of sub.matchAll(/(?<![>=\-<])(>>|>\||>)(?!&)\s*([^\s;&|<>()]+)/g)) {
+			const target = restore(match[2], quoted);
+			if (!isScratch(target, directory) && !(buildTest && isBuildLog(target, directory))) {
+				return blockedWrite(`${head} redirect ${match[1]}`, target);
+			}
+		}
 		const inPlace = ['sed', 'perl', 'ruby'].includes(head) && words.some((word) => /^-[a-zA-Z]*i|^--in-place/.test(word));
-		if (READERS.has(head) && !inPlace) {
-			const inputs = [];
-			// Heredocs/here-strings are data; only a single < names an input file.
-			const operands = sub.replace(/\d*(<<<|<<|<|>>|>\||>)(?:&[\d-]+|\s*([^\s;&|<>()]+))/g, (_match, op, target) => {
-				if (op === '<' && target) inputs.push(restore(target, quoted));
-				return ' ';
-			}).split(/\s+/).map((word) => restore(word, quoted));
-			if (operands[0] === 'sudo') operands.shift();
-			if ([...inputs, ...readTargets(head, operands)].some((file) => !isScratch(file, directory))) return READ_BLOCK_REASON;
-		}
 		if (head === "tee" || head === "truncate") {
-			const files = words.slice(1).filter((word, i, rest) => !word.startsWith("-") &&
+			const operands = sub.replace(/\d*(?:>>|>\||>)(?:&[\d-]+|\s*[^\s;&|<>()]+)/g, " ")
+				.split(/\s+/).map((word) => restore(word, quoted));
+			if (operands[0] === "sudo") operands.shift();
+			const files = operands.slice(1).filter((word, i, rest) => word && !word.startsWith("-") &&
 				!(head === "truncate" && ["-s", "--size", "-r", "--reference"].includes(rest[i - 1])));
-			if (files.some((file) => !isScratch(file, directory))) return BLOCK_REASON;
+			const testPipe = head === "tee" && parts[i - 1] === "|" && BUILD_TEST.test(stripPrefix(parts[i - 2] ?? ""));
+			const target = files.find((file) => !isScratch(file, directory) && !(testPipe && isBuildLog(file, directory)));
+			if (target) return blockedWrite(`${head} output`, target);
 		}
-		if (head === "dd" && words.slice(1).some((word) => word.startsWith("of=") && !isScratch(word.slice(3), directory))) {
-			return BLOCK_REASON;
+		if (head === "dd") {
+			const output = words.slice(1).find((word) => word.startsWith("of=") && !isScratch(word.slice(3), directory));
+			if (output) return blockedWrite("dd of=", output.slice(3));
 		}
 		if (inPlace) {
 			const files = [];
@@ -216,7 +166,8 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 				if (script) { script = false; continue; }
 				files.push(word);
 			}
-			if (!files.length || files.some((file) => !isScratch(file, directory))) return BLOCK_REASON;
+			const target = files.find((file) => !isScratch(file, directory));
+			if (!files.length || target) return blockedWrite(`${head} in-place edit`, target);
 		}
 		if (/^(?:python[0-9.]*|node|ruby|perl|deno|bun)$/.test(head)) {
 			const heredoc = /<<HEREDOC(\d+)/.exec(sub);
@@ -226,8 +177,7 @@ export function classifyBashCommand(command, cwd = process.cwd()) {
 			if (heredoc) source = bodies[Number(heredoc[1])];
 			else if (inline) source = restore(inline[1], quoted);
 			else if (hereString) source = restore(hereString[1], quoted);
-			if (source !== null && sourceWritesWorkspace(source, directory)) return BLOCK_REASON;
-			if (source !== null && sourceReadsWorkspace(source, directory)) return READ_BLOCK_REASON;
+			if (source !== null && sourceWritesWorkspace(source, directory)) return blockedWrite(`${head} inline/heredoc write API`);
 		}
 	}
 	return null;
@@ -237,6 +187,5 @@ export function check(call, config) {
 	if (config?.guardrails?.fileTools?.enabled === false || call.kind !== KIND.SHELL) return null;
 	const reason = classifyBashCommand(call.command, call.cwd);
 	if (!reason) return null;
-	const rule = reason === READ_BLOCK_REASON ? "shell-read" : "shell-write";
-	return { blocked: true, guardrail: "fileTools", rule, target: "shell command", reason };
+	return { blocked: true, guardrail: "fileTools", rule: "shell-write", target: "shell command", reason };
 }

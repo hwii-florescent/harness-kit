@@ -64,6 +64,10 @@ export function buildContext({ cwd = process.cwd() } = {}) {
       .filter(([, v]) => v?.enabled !== false)
       .map(([name]) => name);
 
+    if (config.guardrails?.fileTools?.enabled !== false) {
+      lines.push('- Prefer native read/source-body tools before editing so the editor can reuse the first read; routine shell inspection is allowed.');
+    }
+
     if (active.length) {
       // Deliberately does NOT name the active guardrails.
       //

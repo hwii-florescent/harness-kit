@@ -8,7 +8,51 @@ Read alongside [AGENTS.md](./AGENTS.md) (traps) and [SCOPE.md](./SCOPE.md)
 
 ---
 
-## Current verification — 2026-11-02
+## Current verification — 2026-11-05
+
+This update supersedes earlier shell-read enforcement, replay and live-smoke
+snapshots. No guardrail configuration or adapter wiring was changed.
+
+- Routine shell/interpreter reads now pass `fileTools`; native reads are guidance
+  before editing, not a hard block. Source writes still require native tools.
+  Recognized build/test commands may redirect output or pipe directly to `tee`
+  into literal non-dot `.log` filenames in the working directory or `logs/`.
+  Resolved symlink escapes, unknown destinations and unrelated commands remain
+  blocked. Scratch-glob reads and count-only grep/rg stdin pipelines pass.
+- `npm test`: **491 passing**, with shared four-dialect checks for reads/logs,
+  unsafe destinations, scratch symlinks, neighboring commands and trigger reasons.
+  Python write-mode detection no longer confuses later read-only expressions
+  with an `open` mode; nested write destinations remain covered.
+- Paired replay: the same **9,470 in-scope records / 166 transcripts** went from
+  **585 blocks (6.18%)** with HEAD `e93257f` to **118 (1.25%)** with the updated
+  core: **115 fileTools / 3 heavyPath**, or **467 fewer interventions**.
+  Both cores received each payload during one transcript pass. The remaining
+  verbose blocks were reviewed: source edits, unresolved scratch variables,
+  missing historical directories, unsupported script log destinations and
+  unbounded `out` listings. This is not a measured false-positive rate and is
+  still above the Phase 0 replay gate. MultiEdit/NotebookEdit/Glob/Grep remain
+  absent; the replay parser covers Claude-shaped history, not Pi/omp sessions.
+- `npm run smoke -- --file-tools --heavy-bounds claude codex pi omp`:
+  **all four passed** on Claude **2.1.318**, Codex **0.166.0**, Pi **1.4.0** and
+  omp **18.16.0**, with pinned Haiku/Luna models and existing cost limits.
+  Actual tool output proves ordinary reads, scratch glob reads, bounded listings,
+  metadata and count summaries. Filesystem effects prove both Node test-log
+  redirects/direct tee writes and scratch writes; source writes remain absent.
+  Secret/heavy-path/source-write hook errors are still required, and the fake
+  credential must not appear in output. The first expanded run passed all four:
+  `$HOME/hk-live-smoke-D9l0mK/`. After the final nested-Python-mode regressions,
+  Claude/Codex/Pi passed again in `$HOME/hk-live-smoke-YNPhfU/`; omp correctly
+  failed because its tee call mistyped cwd (`YNPhf4U` instead of `YNPhfU`),
+  leaving no log. This was not a hook rejection or a successful check. An
+  unchanged-model rerun passed every omp check: `$HOME/hk-live-smoke-KEsCvJ/`.
+- `npm run doctor`: **4 installed / 4 wired** (registration only); the single
+  September crash breadcrumb is unchanged. Active diagnostics found no new
+  errors; the existing Semgrep dynamic-RegExp warning at `heavy-path.mjs:30`
+  remains. `git diff --check` and JavaScript syntax checks passed.
+- Existing Pi/omp sessions need `/reload` to replace cached extension modules.
+  No automatic approval dialogs or approval tokens were introduced.
+
+## Prior verification — 2026-11-02
 
 This dated update supersedes the historical approval and Codex-live claims below.
 
